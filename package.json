@@ -1,0 +1,25 @@
+{
+  "name": "faktura-automation",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HolgerDA/faktura-automation.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/HolgerDA/faktura-automation/issues"
+  },
+  "homepage": "https://github.com/HolgerDA/faktura-automation#readme",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "dropbox-v2-api": "^2.5.11",
+    "exceljs": "^4.4.0"
+  }
+}
