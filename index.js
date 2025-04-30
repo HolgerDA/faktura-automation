@@ -47,183 +47,175 @@ async function downloadCSVFile(filePath) {
 }
 
 async function moveCSVFile(sourcePath, targetFolder) {
-    return new Promise((resolve, reject) => {
-      console.log(`🚚 Flytter fil til ${targetFolder}...`);
-      
-      // Opdel filnavn i navn og extension
-      const originalName = path.basename(sourcePath);
-      const baseName = path.basename(originalName, '.csv');
-      const ext = path.extname(originalName) || '.csv';
-      const timestamp = Date.now();
-      
-      // Generer unikt filnavn med tidsstempel
-      const newName = `${baseName}_${timestamp}${ext}`;
-      const destinationPath = `${targetFolder}/${newName}`;
-  
-      dropbox({
-        resource: 'files/move_v2',
-        parameters: {
-          from_path: sourcePath,
-          to_path: destinationPath,
-          autorename: false
-        }
-      }, (err, result) => {
-        if (err) {
-          console.error('❌ Flyttefejl:', err);
-          return reject(err);
-        }
-        console.log(`✅ Fil flyttet til: ${destinationPath}`);
-        resolve(result);
-      });
+  return new Promise((resolve, reject) => {
+    console.log(`🚚 Flytter fil til ${targetFolder}...`);
+    
+    const originalName = path.basename(sourcePath);
+    const baseName = path.basename(originalName, '.csv');
+    const ext = path.extname(originalName) || '.csv';
+    const timestamp = Date.now();
+    const newName = `${baseName}_${timestamp}${ext}`;
+    const destinationPath = `${targetFolder}/${newName}`;
+
+    dropbox({
+      resource: 'files/move_v2',
+      parameters: {
+        from_path: sourcePath,
+        to_path: destinationPath,
+        autorename: false
+      }
+    }, (err, result) => {
+      if (err) {
+        console.error('❌ Flyttefejl:', err);
+        return reject(err);
+      }
+      console.log(`✅ Fil flyttet til: ${destinationPath}`);
+      resolve(result);
     });
-  }
+  });
+}
 
 // ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
-    try {
-      // Valider signatur
-      const signature = req.header('x-dropbox-signature');
-      const expectedSignature = crypto
-        .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
-        .update(req.rawBody)
-        .digest('hex');
-  
-      if (signature !== expectedSignature) {
-        console.log('🚨 Ugyldig signatur!');
-        return res.status(403).send('Uautoriseret');
-      }
-  
-      console.log('🔔 Webhook modtaget - starter behandling');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-  
-      const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
-      console.log('🔍 Checking folder:', folderPath);
-  
-      const folderList = await new Promise((resolve, reject) => {
-        dropbox({
-          resource: 'files/list_folder',
-          parameters: { path: folderPath, limit: 10 }
-        }, (err, result) => {
-          console.log('📡 Rå API værdier:');
-          
-          if (result?.entries) {
-            result.entries.forEach((entry, index) => {
-              console.log(`📄 Fil ${index + 1}:`);
-              console.log('- Navn:', entry.name);
-              console.log('- Sti:', entry.path_lower);
-              console.log('- Størrelse:', entry.size, 'bytes');
-              console.log('- Sidst ændret:', entry.server_modified);
-              console.log('- Type:', entry['.tag']);
-              console.log('------------------------');
-            });
-          } else {
-            console.log('❌ Ingen filer fundet i API respons');
-          }
-      
-          if (err) reject(err);
-          else resolve(result);
-        });
-      });
-  
-      if (!folderList?.entries?.length) {
-        console.log('📭 Mappen er tom');
-        return res.sendStatus(200);
-      }
-  
-      const latestFile = folderList.entries
-        .filter(file => 
-          file['.tag'] === 'file' && 
-          file.name.toLowerCase().endsWith('.csv')
-        )
-        .sort((a, b) => 
-          new Date(b.server_modified) - new Date(a.server_modified)
-        )[0];
-  
-      if (!latestFile) {
-        console.log('⏭️ Ingen CSV-filer at behandle');
-        return res.sendStatus(200);
-      }
-  
-      if (!latestFile.path_display) {
-        console.error('🚫 Manglende sti i filobjekt');
-        return res.status(500).send('Ugyldig filsti');
-      }
-  
-      try {
-        const csvContent = await downloadCSVFile(latestFile.path_display);
-        const data = await parseCSVContent(csvContent);
-  
-        // NY KODE START ===============================
-        // Ekstraher og formatér værdierne fra CSV
-        const {
-          'Product Id': productId,
-          'Style': style,
-          'Name': name,
-          'Size': size,
-          'Amount': amount,
-          'Locations': locations,
-          'Purchase Price DKK': purchasePrice,
-          'RRP': rrp,
-          'Tariff Code': tariffCode,
-          'Country of Origin': countryOrigin
-        } = data;
-  
-        console.log('\n📋 Udpakket CSV-data:');
-        console.log(`Product ID: ${productId}`);
-        console.log(`Style: ${style}`);
-        console.log(`Name: ${name}`);
-        console.log(`Size: ${size}`);
-        console.log(`Amount: ${amount}`);
-        console.log(`Locations: ${locations}`);
-        console.log(`Purchase Price DKK: ${purchasePrice}`);
-        console.log(`RRP: ${rrp}`);
-        console.log(`Tariff Code: ${tariffCode}`);
-        console.log(`Country of Origin: ${countryOrigin}\n`);
-  
-        // Her kan du bruge variablerne i andre funktioner
-        // eksempel: opretOrdre(productId, style, name...)
-        // NY KODE SLUT ===============================
-  
-        await moveCSVFile(latestFile.path_display, '/used csv-files');
-        console.log('✅ Behandling gennemført');
-  
-      } catch (error) {
-        console.error('💥 Fejl under behandling:', error);
-        return res.status(500).send('Behandlingsfejl');
-      }
-  
-      res.sendStatus(200);
-    } catch (error) {
-      console.error('‼️ Kritisk fejl:', error);
-      res.status(500).send('Serverfejl');
+  try {
+    const signature = req.header('x-dropbox-signature');
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
+      .update(req.rawBody)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      console.log('🚨 Ugyldig signatur!');
+      return res.status(403).send('Uautoriseret');
     }
-  });
+
+    console.log('🔔 Webhook modtaget - starter behandling');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
+    console.log('🔍 Checking folder:', folderPath);
+
+    const folderList = await new Promise((resolve, reject) => {
+      dropbox({
+        resource: 'files/list_folder',
+        parameters: { path: folderPath, limit: 10 }
+      }, (err, result) => {
+        console.log('📡 Rå API værdier:');
+        if (result?.entries) {
+          result.entries.forEach((entry, index) => {
+            console.log(`📄 Fil ${index + 1}:`);
+            console.log('- Navn:', entry.name);
+            console.log('- Sti:', entry.path_lower);
+            console.log('- Størrelse:', entry.size, 'bytes');
+            console.log('- Sidst ændret:', entry.server_modified);
+            console.log('- Type:', entry['.tag']);
+            console.log('------------------------');
+          });
+        }
+        if (err) reject(err);
+        else resolve(result);
+      });
+    });
+
+    if (!folderList?.entries?.length) {
+      console.log('📭 Mappen er tom');
+      return res.sendStatus(200);
+    }
+
+    const latestFile = folderList.entries
+      .filter(file => 
+        file['.tag'] === 'file' && 
+        file.name.toLowerCase().endsWith('.csv')
+      )
+      .sort((a, b) => 
+        new Date(b.server_modified) - new Date(a.server_modified)
+      )[0];
+
+    if (!latestFile) {
+      console.log('⏭️ Ingen CSV-filer at behandle');
+      return res.sendStatus(200);
+    }
+
+    if (!latestFile.path_display) {
+      console.error('🚫 Manglende sti i filobjekt');
+      return res.status(500).send('Ugyldig filsti');
+    }
+
+    try {
+      const csvContent = await downloadCSVFile(latestFile.path_display);
+      const data = await parseCSVContent(csvContent);
+
+      // Udpakning af data
+      const {
+        ProductId,
+        Style,
+        Name,
+        Size,
+        Amount,
+        Locations,
+        PurchasePriceDKK,
+        RRP,
+        TariffCode,
+        CountryOfOrigin
+      } = data;
+
+      console.log('\n📋 Udpakket CSV-data:');
+      console.log(`Product ID: ${ProductId}`);
+      console.log(`Style: ${Style}`);
+      console.log(`Name: ${Name}`);
+      console.log(`Size: ${Size}`);
+      console.log(`Amount: ${Amount}`);
+      console.log(`Locations: ${Locations}`);
+      console.log(`Purchase Price DKK: ${PurchasePriceDKK}`);
+      console.log(`RRP: ${RRP}`);
+      console.log(`Tariff Code: ${TariffCode}`);
+      console.log(`Country of Origin: ${CountryOfOrigin}\n`);
+
+      await moveCSVFile(latestFile.path_display, '/used csv-files');
+      console.log('✅ Behandling gennemført');
+
+    } catch (error) {
+      console.error('💥 Fejl under behandling:', error);
+      return res.status(500).send('Behandlingsfejl');
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('‼️ Kritisk fejl:', error);
+    res.status(500).send('Serverfejl');
+  }
+});
+
 // ================== PARSE FUNKTION ==================
 function parseCSVContent(csvData) {
-    return new Promise((resolve, reject) => {
-      const results = [];
-      const parser = csv({
-        separator: ',', // Eksplicit angiv separator
-        skipLines: 1,   // Spring header-række over (a1)
-        strict: true     // Kræv samme antal kolonner i alle rækker
-      })
-      .on('headers', (headers) => {
-        console.log('📋 CSV Headers:', headers);
-      })
-      .on('data', (data) => {
-        console.log('📖 Rå CSV række:', data);
-        results.push(data);
-      })
-      .on('end', () => {
-        if (results.length === 0) return reject(new Error('Ingen data i CSV'));
-        resolve(results[0]); // Første datarække (a2)
-      })
-      .on('error', reject);
-  
-      parser.write(csvData);
-      parser.end();
-    });
-  }
+  return new Promise((resolve, reject) => {
+    const results = [];
+    const parser = csv({
+      headers: [
+        'ProductId',
+        'Style',
+        'Name',
+        'Size',
+        'Amount',
+        'Locations',
+        'PurchasePriceDKK',
+        'RRP',
+        'TariffCode',
+        'CountryOfOrigin'
+      ],
+      skipLines: 0
+    })
+    .on('data', (data) => results.push(data))
+    .on('end', () => {
+      if (results.length === 0) return reject(new Error('Ingen data i CSV'));
+      resolve(results[0]);
+    })
+    .on('error', reject);
+
+    parser.write(csvData);
+    parser.end();
+  });
+}
 
 // ================== MAPPETJEK ==================
 async function checkFolder() {
@@ -236,8 +228,8 @@ async function checkFolder() {
       }, (err, res) => err ? reject(err) : resolve(res));
     });
 
-    // KORRIGERET: Fjern .result
-   
+    console.log('📂 Mappeindhold:', result?.entries?.length ? `${result.entries.length} filer` : 'Tom');
+    
   } catch (error) {
     console.error('❌ Mappetjek fejlede:', error.message);
     console.error('💡 Tjek:');
