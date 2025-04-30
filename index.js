@@ -4,6 +4,7 @@ const Dropbox = require('dropbox-v2-api');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -26,21 +27,20 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  console.log('📩 Fik POST-anmodning (filændring)');
+    try {
+      console.log('📩 Fik POST-anmodning (filændring)');
+      
+      // Valider signatur
+      const signature = req.header('x-dropbox-signature');
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
+        .update(req.rawBody)
+        .digest('hex');
   
-  try {
-    // Tjek signatur
-    const signature = req.header('x-dropbox-signature');
-    const isValid = dropbox.webhook.verify(
-      process.env.DROPBOX_APP_SECRET,
-      req.rawBody, // Brug rå data
-      signature
-    );
-
-    if (!isValid) {
-      console.log('🚨 Ugyldig signatur!');
-      return res.status(403).send('Ulovlig anmodning');
-    }
+      if (signature !== expectedSignature) {
+        console.log('🚨 Ugyldig signatur!');
+        return res.status(403).send('Ulovlig anmodning');
+      }
 
     console.log('🔍 Kigger efter CSV-filer...');
     const changes = req.body.list_folder.entries;
