@@ -121,52 +121,60 @@ async function moveCSVFile(sourcePath, targetFolder) {
 }
 
 // ================== WEBHOOK HANDLERING ==================
+// ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
-  try {
-    // Valider signatur
-    const signature = req.header('x-dropbox-signature');
-    const expectedSignature = crypto
-      .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
-      .update(req.rawBody)
-      .digest('hex');
-
-    if (signature !== expectedSignature) {
-      console.log('🚨 Ugyldig signatur!');
-      return res.status(403).send('Uautoriseret');
-    }
-
-    // Behandling af filændringer
-    const changes = req.body.list_folder;
-    if (!changes || !changes.entries.length) {
-      console.log('ℹ️ Ingen ændringer at behandle');
-      return res.sendStatus(200);
-    }
-
-    // Behandler hver CSV fil
-    for (const entry of changes.entries) {
-      if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
-        try {
-          console.log(`\n🔎 Behandler fil: ${entry.name}`);
-          
-          // Hent og processer fil
-          const csvContent = await downloadCSVFile(entry.path_display);
-          const data = await parseCSVContent(csvContent);
-          await moveCSVFile(entry.path_display, '/used csv-files');
-          
-          // Log data
-          console.log('📦 Behandlet data:', data);
-        } catch (error) {
-          console.error(`💥 Fejl i filbehandling: ${error.message}`);
+    try {
+      // Valider signatur
+      const signature = req.header('x-dropbox-signature');
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
+        .update(req.rawBody)
+        .digest('hex');
+  
+      if (signature !== expectedSignature) {
+        console.log('🚨 Ugyldig signatur!');
+        return res.status(403).send('Uautoriseret');
+      }
+  
+      // Behandling af filændringer
+      const accounts = req.body.list_folder?.accounts || [];
+      console.log(`🔎 ${accounts.length} konti med ændringer`);
+  
+      // Hvis ingen konti, check direkte i body
+      const changes = accounts.length > 0 
+        ? req.body.list_folder 
+        : req.body;
+  
+      if (!changes?.entries?.length) {
+        console.log('ℹ️ Ingen ændringer at behandle');
+        return res.sendStatus(200);
+      }
+  
+      // Behandler hver CSV fil
+      for (const entry of changes.entries) {
+        if (entry?.['.tag'] === 'file' && entry.name?.endsWith('.csv')) {
+          try {
+            console.log(`\n🔎 Behandler fil: ${entry.name}`);
+            
+            // Hent og processer fil
+            const csvContent = await downloadCSVFile(entry.path_display);
+            const data = await parseCSVContent(csvContent);
+            await moveCSVFile(entry.path_display, '/used csv-files');
+            
+            // Log data
+            console.log('📦 Behandlet data:', data);
+          } catch (error) {
+            console.error(`💥 Fejl i filbehandling: ${error.message}`);
+          }
         }
       }
+  
+      res.sendStatus(200);
+    } catch (error) {
+      console.error('‼️ Kritisk fejl:', error);
+      res.status(500).send('Serverfejl');
     }
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('‼️ Kritisk fejl:', error);
-    res.status(500).send('Serverfejl');
-  }
-});
+  });
 
 // ================== SERVER START ==================
 const PORT = process.env.PORT || 8080;
