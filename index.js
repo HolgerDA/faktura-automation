@@ -1,42 +1,55 @@
 require('dotenv').config();
 const express = require('express');
 const Dropbox = require('dropbox-v2-api');
-const util = require('util');
-const ExcelJS = require('exceljs');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const ExcelJS = require('exceljs');
 
 const app = express();
 
-// ====== Middleware til rå data ======
+// ================== KONFIGURATION ==================
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString();
   }
 }));
 
-// Autentificér og promisify Dropbox-kald
 const dropbox = Dropbox.authenticate({
   token: process.env.DROPBOX_TOKEN,
   appSecret: process.env.DROPBOX_APP_SECRET
 });
-const dropboxAsync = util.promisify(dropbox);
 
-// ====== Midlertidig cursor-lagring ======
-let cursors = {}; // I produktion brug en rigtig database
+// ================== MIDLERTIDIG DATA ==================
+let cursors = {}; // Erstat med database i produktion
 
-// ====== Webhook endpoints ======
+// ================== HJÆLPEFUNKTIONER ==================
+const getChanges = async (cursor) => {
+  try {
+    const response = await dropbox({
+      resource: 'files/list_folder/continue',
+      parameters: { cursor }
+    }, (err, result) => {}).promise();
+
+    console.log('✅ Dropbox API respons modtaget');
+    return response;
+  } catch (error) {
+    console.error('❌ Dropbox API fejl:', error);
+    return { entries: [] };
+  }
+};
+
+// ================== WEBHOOK ENDPOINTS ==================
 app.get('/webhook', (req, res) => {
-  console.log('✅ Valideringsrequest modtaget');
+  console.log('🔔 Valideringsrequest modtaget');
   res.type('text').send(req.query.challenge);
 });
 
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('📩 Filændringsnotifikation modtaget');
-
-    // 1) Valider signatur
+    console.log('\n📬 Ny webhook-notifikation modtaget');
+    
+    // Valider signatur
     const signature = req.header('x-dropbox-signature');
     const expectedSignature = crypto
       .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
@@ -44,64 +57,75 @@ app.post('/webhook', async (req, res) => {
       .digest('hex');
 
     if (signature !== expectedSignature) {
-      console.log('🚨 Ugyldig signatur!');
+      console.log('🚨 Ugyldig signatur - anmodning afvist');
       return res.status(403).send('Uautoriseret');
     }
 
-    // 2) Loop over de konti, der har ændringer
+    // Behandling af konti
     const accounts = req.body.list_folder?.accounts || [];
-    for (const accountId of accounts) {
-      console.log(`🔍 Behandler konto: ${accountId}`);
+    console.log(`🔎 ${accounts.length} konti med ændringer`);
 
+    for (const accountId of accounts) {
+      console.log(`\n💼 Behandler konto: ${accountId}`);
+      
       try {
-        // Hent cursor fra memory eller initialiser
         let cursor = cursors[accountId];
+        
+        // Hvis ingen cursor findes, hent initial
         if (!cursor) {
-          const init = await dropboxAsync({
+          console.log('⚙️ Henter initial cursor');
+          const initResponse = await dropbox({
             resource: 'files/list_folder',
-            parameters: { path: '', include_media_info: true }
-          });
-          cursor = init.cursor;
+            parameters: { path: '' }
+          }, (err, result) => {}).promise();
+          
+          cursor = initResponse.cursor;
           cursors[accountId] = cursor;
         }
 
-        // Hent kun ændringer siden sidst
-        const changes = await dropboxAsync({
-          resource: 'files/list_folder/continue',
-          parameters: { cursor }
-        });
-
-        // Gem ny cursor
+        // Hent ændringer
+        const changes = await getChanges(cursor);
+        
+        // Opdater cursor
         cursors[accountId] = changes.cursor;
+        console.log(`🔄 Opdateret cursor: ${changes.cursor.slice(0, 15)}...`);
 
-        // Bearbejd hver ændring (kun CSV-filer)
-        if (Array.isArray(changes.entries)) {
+        // Behandler filændringer
+        if (changes?.entries?.length > 0) {
+          console.log(`📂 ${changes.entries.length} ændrede filer:`);
+          
           changes.entries.forEach(entry => {
-            if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
-              console.log(`📄 CSV-fil fundet: ${entry.name}`);
-              // TODO: Tilføj din CSV-behandlings-logik her
+            if (entry?.['.tag'] === 'file' && entry?.name?.endsWith?.('.csv')) {
+              console.log(`\n📄 CSV-fil fundet: ${entry.name}`);
+              console.log('Sti:', entry.path_display);
+              console.log('Ændringstid:', entry.server_modified);
+              
+              // ======== TILFØJ DIN BEHANDLINGSLOGIK HER ========
+              // Eksempel: Hent fil, processer CSV, generer faktura
             }
           });
         } else {
-          console.log('⚠️ Ingen entries at behandle');
+          console.log('ℹ️ Ingen nye filændringer');
         }
 
-      } catch (err) {
-        console.error(`💥 Fejl ved behandling af konto ${accountId}:`, err);
+      } catch (error) {
+        console.error(`💥 Fejl i konto ${accountId}:`, error.message);
       }
     }
 
     res.sendStatus(200);
-
-  } catch (err) {
-    console.error('❌ Kritisk fejl i webhook:', err);
+  } catch (error) {
+    console.error('‼️ Kritisk fejl:', error);
     res.status(500).send('Serverfejl');
   }
 });
 
-// ====== Server start ======
+// ================== SERVER START ==================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 Server kører på port ${PORT}`);
-  console.log(`🌐 Webhook URL: https://faktura-automation-production.up.railway.app/webhook`);
+  console.log(`\n🚀 Server kører på port ${PORT}`);
+  console.log(`🌐 Webhook URL: ${process.env.RAILWAY_STATIC_URL}/webhook`);
+  console.log('🔧 Konfiguration:');
+  console.log('- Dropbox App Secret:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌');
+  console.log('- Dropbox Token:', process.env.DROPBOX_TOKEN ? '✅' : '❌');
 });
