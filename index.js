@@ -15,7 +15,7 @@ app.use(express.json({
 }));
 
 const dropbox = Dropbox.authenticate({
-  token: process.env.DROPBOX_TOKEN
+  token: process.env.DROPBOX_TOKEN,
   appSecret: process.env.DROPBOX_APP_SECRET
 });
 
