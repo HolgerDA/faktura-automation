@@ -120,11 +120,11 @@ async function moveCSVFile(sourcePath, targetFolder) {
   }
 }
 
-// ================== WEBHOOK HANDLERING ==================
+
 // ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
     try {
-      // Valider signatur
+      // Valider signatur (som før)
       const signature = req.header('x-dropbox-signature');
       const expectedSignature = crypto
         .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
@@ -136,37 +136,44 @@ app.post('/webhook', async (req, res) => {
         return res.status(403).send('Uautoriseret');
       }
   
-      // Behandling af filændringer
-      const accounts = req.body.list_folder?.accounts || [];
-      console.log(`🔎 ${accounts.length} konti med ændringer`);
+      console.log('🔔 Webhook modtaget - starter behandling');
   
-      // Hvis ingen konti, check direkte i body
-      const changes = accounts.length > 0 
-        ? req.body.list_folder 
-        : req.body;
+      // 1. List alle filer i /csv-filer
+      const folderList = await dropbox({
+        resource: 'files/list_folder',
+        parameters: {
+          path: '/csv-filer',
+          limit: 1
+        }
+      }).promise();
   
-      if (!changes?.entries?.length) {
-        console.log('ℹ️ Ingen ændringer at behandle');
+      // 2. Tjek om der er filer at behandle
+      if (!folderList.result?.entries?.length) {
+        console.log('📭 Mappen er tom');
         return res.sendStatus(200);
       }
   
-      // Behandler hver CSV fil
-      for (const entry of changes.entries) {
-        if (entry?.['.tag'] === 'file' && entry.name?.endsWith('.csv')) {
-          try {
-            console.log(`\n🔎 Behandler fil: ${entry.name}`);
-            
-            // Hent og processer fil
-            const csvContent = await downloadCSVFile(entry.path_display);
-            const data = await parseCSVContent(csvContent);
-            await moveCSVFile(entry.path_display, '/used csv-files');
-            
-            // Log data
-            console.log('📦 Behandlet data:', data);
-          } catch (error) {
-            console.error(`💥 Fejl i filbehandling: ${error.message}`);
-          }
-        }
+      // 3. Vælg den nyeste fil
+      const latestFile = folderList.result.entries
+        .filter(file => file['.tag'] === 'file' && file.name.endsWith('.csv'))
+        .sort((a, b) => new Date(b.server_modified) - new Date(a.server_modified))[0];
+  
+      if (!latestFile) {
+        console.log('⏭️ Ingen CSV-filer at behandle');
+        return res.sendStatus(200);
+      }
+  
+      console.log('🎯 Valgt fil:', latestFile.name);
+  
+      // 4. Hent og processer fil
+      try {
+        const csvContent = await downloadCSVFile(latestFile.path_display);
+        const data = await parseCSVContent(csvContent);
+        await moveCSVFile(latestFile.path_display, '/used csv-files');
+        console.log('✅ Behandling gennemført:', data);
+      } catch (error) {
+        console.error('💥 Fejl under behandling:', error);
+        return res.status(500).send('Behandlingsfejl');
       }
   
       res.sendStatus(200);
