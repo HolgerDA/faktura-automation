@@ -50,6 +50,14 @@ app.post('/webhook', async (req, res) => {
       accounts.forEach(accountId => {
         console.log('💼 Konto med ændringer:', accountId);
         // Her skal du kalde Dropbox API for at hente faktiske filændringer
+        const cursor = await getCursorFromDB(); // Du skal gemme cursoren
+const changes = await dropbox({
+  resource: 'files/list_folder/continue',
+  parameters: { cursor }
+});
+
+console.log('Ændrede filer:', changes.entries);
+
       });
   
       res.sendStatus(200);
