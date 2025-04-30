@@ -8,7 +8,7 @@ const crypto = require('crypto');
 
 const app = express();
 
-// ====== NYT: Tillad at læse rå data fra requests ======
+// ====== Middleware til rå data ======
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString();
@@ -20,56 +20,86 @@ const dropbox = Dropbox.authenticate({
   appSecret: process.env.DROPBOX_APP_SECRET
 });
 
+// ====== Midlertidig cursor-lagring ======
+let cursors = {}; // Erstat med database i produktion
+
 // ====== Webhook endpoints ======
 app.get('/webhook', (req, res) => {
-  console.log('✅ Fik GET-anmodning (validering)');
+  console.log('✅ Valideringsrequest modtaget');
   res.type('text').send(req.query.challenge);
 });
 
 app.post('/webhook', async (req, res) => {
-    try {
-      console.log('📩 Fik POST-anmodning (filændring)');
+  try {
+    console.log('📩 Filændringsnotifikation modtaget');
+    
+    // Valider signatur
+    const signature = req.header('x-dropbox-signature');
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
+      .update(req.rawBody)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      console.log('🚨 Ugyldig signatur!');
+      return res.status(403).send('Uautoriseret');
+    }
+
+    // Behandling af konti med ændringer
+    const accounts = req.body.list_folder?.accounts || [];
+    
+    for (const accountId of accounts) {
+      console.log(`🔍 Behandler konto: ${accountId}`);
       
-      // Valider signatur
-      const signature = req.header('x-dropbox-signature');
-      const expectedSignature = crypto
-        .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
-        .update(req.rawBody)
-        .digest('hex');
-  
-      if (signature !== expectedSignature) {
-        console.log('🚨 Ugyldig signatur!');
-        return res.status(403).send('Ulovlig anmodning');
+      try {
+        // Hent eller initialiser cursor
+        let cursor = cursors[accountId];
+        
+        if (!cursor) {
+          // Første gang - hent initial cursor
+          const initResponse = await dropbox({
+            resource: 'files/list_folder',
+            parameters: {
+              path: '',
+              include_hashes: true
+            }
+          });
+          cursor = initResponse.cursor;
+          cursors[accountId] = cursor;
+        }
+
+        // Hent ændringer
+        const changes = await dropbox({
+          resource: 'files/list_folder/continue',
+          parameters: { cursor }
+        });
+
+        // Opdater cursor
+        cursors[accountId] = changes.cursor;
+
+        // Behandler ændrede filer
+        changes.entries.forEach(entry => {
+          if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
+            console.log(`📄 CSV-fil fundet: ${entry.name}`);
+            // Tilføj din filbehandlingslogik her
+          }
+        });
+
+      } catch (error) {
+        console.error(`💥 Fejl ved behandling af ${accountId}:`, error);
       }
-  
-      console.log('🔍 Kigger efter ændringer...');
-      
-      // KORREKT DATAUDTRÆK
-      const accounts = req.body.list_folder?.accounts || [];
-      
-      accounts.forEach(accountId => {
-        console.log('💼 Konto med ændringer:', accountId);
-        // Her skal du kalde Dropbox API for at hente faktiske filændringer
-        const cursor = await getCursorFromDB(); // Du skal gemme cursoren
-const changes = await dropbox({
-  resource: 'files/list_folder/continue',
-  parameters: { cursor }
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('❌ Kritisk fejl:', error);
+    res.status(500).send('Serverfejl');
+  }
 });
 
-console.log('Ændrede filer:', changes.entries);
-
-      });
-  
-      res.sendStatus(200);
-    } catch (error) {
-      console.log('💥 Fejl:', error);
-      res.status(500).send('Serverfejl');
-    }
-  });
-
-// ====== Start server ======
+// ====== Server start ======
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 Server klar på port ${PORT}`);
+  console.log(`🚀 Server kører på port ${PORT}`);
   console.log(`🌐 Webhook URL: https://faktura-automation-production.up.railway.app/webhook`);
 });
