@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const Dropbox = require('dropbox-v2-api');
+const util = require('util');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
@@ -15,13 +16,15 @@ app.use(express.json({
   }
 }));
 
+// Autentificér og promisify Dropbox-kald
 const dropbox = Dropbox.authenticate({
   token: process.env.DROPBOX_TOKEN,
   appSecret: process.env.DROPBOX_APP_SECRET
 });
+const dropboxAsync = util.promisify(dropbox);
 
 // ====== Midlertidig cursor-lagring ======
-let cursors = {}; // Erstat med database i produktion
+let cursors = {}; // I produktion brug en rigtig database
 
 // ====== Webhook endpoints ======
 app.get('/webhook', (req, res) => {
@@ -32,8 +35,8 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   try {
     console.log('📩 Filændringsnotifikation modtaget');
-    
-    // Valider signatur
+
+    // 1) Valider signatur
     const signature = req.header('x-dropbox-signature');
     const expectedSignature = crypto
       .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
@@ -45,58 +48,53 @@ app.post('/webhook', async (req, res) => {
       return res.status(403).send('Uautoriseret');
     }
 
-    // Behandling af konti med ændringer
+    // 2) Loop over de konti, der har ændringer
     const accounts = req.body.list_folder?.accounts || [];
-    
     for (const accountId of accounts) {
       console.log(`🔍 Behandler konto: ${accountId}`);
-      
+
       try {
-        // Hent eller initialiser cursor
+        // Hent cursor fra memory eller initialiser
         let cursor = cursors[accountId];
-        
         if (!cursor) {
-          // Første gang - hent initial cursor
-          const initResponse = await dropbox({
+          const init = await dropboxAsync({
             resource: 'files/list_folder',
-            parameters: {
-              path: '',
-              include_hashes: true
-            }
+            parameters: { path: '', include_media_info: true }
           });
-          cursor = initResponse.cursor;
+          cursor = init.cursor;
           cursors[accountId] = cursor;
         }
 
-        // Hent ændringer
-        const changes = await dropbox({
+        // Hent kun ændringer siden sidst
+        const changes = await dropboxAsync({
           resource: 'files/list_folder/continue',
           parameters: { cursor }
         });
 
-        // Opdater cursor
+        // Gem ny cursor
         cursors[accountId] = changes.cursor;
 
-        // Behandler ændrede filer
-        if (changes?.entries && Array.isArray(changes.entries)) {
-            changes.entries.forEach(entry => {
-              if (entry?.['.tag'] === 'file' && entry?.name?.endsWith?.('.csv')) {
-                console.log(`📄 CSV-fil fundet: ${entry.name}`);
-                // Tilføj din filbehandlingslogik her
-              }
-            });
-          } else {
-            console.log('ℹ️ Ingen ændrede filer eller ugyldig dataformat:', changes);
-          }
+        // Bearbejd hver ændring (kun CSV-filer)
+        if (Array.isArray(changes.entries)) {
+          changes.entries.forEach(entry => {
+            if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
+              console.log(`📄 CSV-fil fundet: ${entry.name}`);
+              // TODO: Tilføj din CSV-behandlings-logik her
+            }
+          });
+        } else {
+          console.log('⚠️ Ingen entries at behandle');
+        }
 
-      } catch (error) {
-        console.error(`💥 Fejl ved behandling af ${accountId}:`, error);
+      } catch (err) {
+        console.error(`💥 Fejl ved behandling af konto ${accountId}:`, err);
       }
     }
 
     res.sendStatus(200);
-  } catch (error) {
-    console.error('❌ Kritisk fejl:', error);
+
+  } catch (err) {
+    console.error('❌ Kritisk fejl i webhook:', err);
     res.status(500).send('Serverfejl');
   }
 });
