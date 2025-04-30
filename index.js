@@ -47,29 +47,36 @@ async function downloadCSVFile(filePath) {
 }
 
 async function moveCSVFile(sourcePath, targetFolder) {
-  return new Promise((resolve, reject) => {
-    console.log(`🚚 Flytter fil til ${targetFolder}...`);
-    
-    const fileName = path.basename(sourcePath);
-    const destinationPath = `${targetFolder}/${fileName}`;
-
-    dropbox({
-      resource: 'files/move_v2',
-      parameters: {
-        from_path: sourcePath,
-        to_path: destinationPath,
-        autorename: false
-      }
-    }, (err, result) => {
-      if (err) {
-        console.error('❌ Flyttefejl:', err);
-        return reject(err);
-      }
-      console.log(`✅ Fil flyttet til: ${destinationPath}`);
-      resolve(result);
+    return new Promise((resolve, reject) => {
+      console.log(`🚚 Flytter fil til ${targetFolder}...`);
+      
+      // Opdel filnavn i navn og extension
+      const originalName = path.basename(sourcePath);
+      const baseName = path.basename(originalName, '.csv');
+      const ext = path.extname(originalName) || '.csv';
+      const timestamp = Date.now();
+      
+      // Generer unikt filnavn med tidsstempel
+      const newName = `${baseName}_${timestamp}${ext}`;
+      const destinationPath = `${targetFolder}/${newName}`;
+  
+      dropbox({
+        resource: 'files/move_v2',
+        parameters: {
+          from_path: sourcePath,
+          to_path: destinationPath,
+          autorename: false
+        }
+      }, (err, result) => {
+        if (err) {
+          console.error('❌ Flyttefejl:', err);
+          return reject(err);
+        }
+        console.log(`✅ Fil flyttet til: ${destinationPath}`);
+        resolve(result);
+      });
     });
-  });
-}
+  }
 
 // ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
