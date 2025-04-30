@@ -140,8 +140,6 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    console.log('🎯 Valgt fil:', latestFile.name);
-    console.log('📌 Fil detaljer:', JSON.stringify(latestFile, null, 2));
 
     // Valider path_display
     if (!latestFile.path_display) {
