@@ -64,3 +64,4 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server klar på port ${PORT}`);
   console.log(`🌐 Webhook URL: https://faktura-automation-production.up.railway.app/webhook`);
+});
