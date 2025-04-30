@@ -92,16 +92,32 @@ app.post('/webhook', async (req, res) => {
     const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
     console.log('🔍 Checking folder:', folderPath);
 
+    //Print af specifikke dele af API kald
     const folderList = await new Promise((resolve, reject) => {
-      dropbox({
-        resource: 'files/list_folder',
-        parameters: { path: folderPath, limit: 10 }
-      }, (err, result) => {
-        console.log('📡 Raw API response:', JSON.stringify(result, null, 2));
-        if (err) reject(err);
-        else resolve(result);
+        dropbox({
+          resource: 'files/list_folder',
+          parameters: { path: folderPath, limit: 10 }
+        }, (err, result) => {
+          console.log('📡 Rå API værdier:');
+          
+          if (result?.entries) {
+            result.entries.forEach((entry, index) => {
+              console.log(`📄 Fil ${index + 1}:`);
+              console.log('- Navn:', entry.name);
+              console.log('- Sti:', entry.path_lower);
+              console.log('- Størrelse:', entry.size, 'bytes');
+              console.log('- Sidst ændret:', entry.server_modified);
+              console.log('- Type:', entry['.tag']);
+              console.log('------------------------');
+            });
+          } else {
+            console.log('❌ Ingen filer fundet i API respons');
+          }
+      
+          if (err) reject(err);
+          else resolve(result);
+        });
       });
-    });
 
     // KORRIGERET: Fjern .result da responsen ikke er nested
     if (!folderList?.entries?.length) {
@@ -179,9 +195,7 @@ async function checkFolder() {
     });
 
     // KORRIGERET: Fjern .result
-    console.log('📂 Folder content:', result?.entries || 'Ingen filer');
-    console.log('🔄 Dropbox cursor:', result?.cursor || 'Ingen cursor');
-    
+   
   } catch (error) {
     console.error('❌ Mappetjek fejlede:', error.message);
     console.error('💡 Tjek:');
