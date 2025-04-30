@@ -78,12 +78,16 @@ app.post('/webhook', async (req, res) => {
         cursors[accountId] = changes.cursor;
 
         // Behandler ændrede filer
-        changes.entries.forEach(entry => {
-          if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
-            console.log(`📄 CSV-fil fundet: ${entry.name}`);
-            // Tilføj din filbehandlingslogik her
+        if (changes?.entries && Array.isArray(changes.entries)) {
+            changes.entries.forEach(entry => {
+              if (entry?.['.tag'] === 'file' && entry?.name?.endsWith?.('.csv')) {
+                console.log(`📄 CSV-fil fundet: ${entry.name}`);
+                // Tilføj din filbehandlingslogik her
+              }
+            });
+          } else {
+            console.log('ℹ️ Ingen ændrede filer eller ugyldig dataformat:', changes);
           }
-        });
 
       } catch (error) {
         console.error(`💥 Fejl ved behandling af ${accountId}:`, error);
