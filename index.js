@@ -2,10 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const Dropbox = require('dropbox-v2-api');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const ExcelJS = require('exceljs');
-
+const csv = require('csv-parser');
+const axios = require('axios');
 const app = express();
 
 // ================== KONFIGURATION ==================
@@ -16,39 +14,115 @@ app.use(express.json({
 }));
 
 const dropbox = Dropbox.authenticate({
-  token: process.env.DROPBOX_TOKEN,
-  appSecret: process.env.DROPBOX_APP_SECRET
+  token: process.env.DROPBOX_TOKEN
 });
-
-// ================== MIDLERTIDIG DATA ==================
-let cursors = {}; // Erstat med database i produktion
 
 // ================== HJÆLPEFUNKTIONER ==================
-const getChanges = async (cursor) => {
+
+/**
+ * Henter filindhold fra Dropbox
+ * @param {string} filePath - Sti til filen i Dropbox
+ */
+async function downloadCSVFile(filePath) {
   try {
-    const response = await dropbox({
-      resource: 'files/list_folder/continue',
-      parameters: { cursor }
-    }, (err, result) => {}).promise();
+    console.log(`📥 Henter fil: ${filePath}`);
+    
+    // Får en midlertidig download link
+    const { result } = await dropbox({
+      resource: 'files/get_temporary_link',
+      parameters: { path: filePath }
+    }).promise();
 
-    console.log('✅ Dropbox API respons modtaget');
-    return response;
+    // Download filindhold med axios
+    const response = await axios.get(result.link);
+    console.log(`✅ Fil hentet (${response.data.length} tegn)`);
+    return response.data;
   } catch (error) {
-    console.error('❌ Dropbox API fejl:', error);
-    return { entries: [] };
+    console.error('❌ Fejl ved hentning af fil:', error.message);
+    throw error;
   }
-};
+}
 
-// ================== WEBHOOK ENDPOINTS ==================
-app.get('/webhook', (req, res) => {
-  console.log('🔔 Valideringsrequest modtaget');
-  res.type('text').send(req.query.challenge);
-});
+/**
+ * Parser CSV-indhold til variabler
+ * @param {string} csvData - CSV tekstdata
+ */
+function parseCSVContent(csvData) {
+  return new Promise((resolve, reject) => {
+    console.log('🔍 Parser CSV-indhold...');
+    const results = [];
 
+    // Opret en CSV parser stream
+    const parser = csv()
+      .on('data', (data) => {
+        console.log('📖 Læser række:', data);
+        results.push(data);
+      })
+      .on('end', () => {
+        if(results.length === 0) {
+          reject(new Error('Ingen data rækker fundet i CSV'));
+          return;
+        }
+        
+        // Valider kolonner
+        const expectedColumns = [
+          'Product Id', 'Style', 'Name', 'Size', 'Amount',
+          'Locations', 'Purchase Price DKK', 'RRP', 
+          'Tariff Code', 'Country of Origin'
+        ];
+        
+        const firstRow = results[0];
+        const missingColumns = expectedColumns.filter(col => !(col in firstRow));
+        
+        if(missingColumns.length > 0) {
+          reject(new Error(`Manglende kolonner: ${missingColumns.join(', ')}`));
+          return;
+        }
+
+        console.log('✅ CSV parsing gennemført');
+        resolve(firstRow);
+      })
+      .on('error', error => {
+        console.error('❌ CSV parse fejl:', error.message);
+        reject(error);
+      });
+
+    parser.write(csvData);
+    parser.end();
+  });
+}
+
+/**
+ * Flytter en fil i Dropbox
+ * @param {string} sourcePath - Original sti
+ * @param {string} targetFolder - Mål mappe
+ */
+async function moveCSVFile(sourcePath, targetFolder) {
+  try {
+    console.log(`🚚 Flytter fil til ${targetFolder}...`);
+    
+    const fileName = path.basename(sourcePath);
+    const destinationPath = `${targetFolder}/${fileName}`;
+
+    await dropbox({
+      resource: 'files/move_v2',
+      parameters: {
+        from_path: sourcePath,
+        to_path: destinationPath,
+        autorename: false
+      }
+    }).promise();
+
+    console.log(`✅ Fil flyttet til: ${destinationPath}`);
+  } catch (error) {
+    console.error('❌ Fejl ved flytning af fil:', error.message);
+    throw error;
+  }
+}
+
+// ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('\n📬 Ny webhook-notifikation modtaget');
-    
     // Valider signatur
     const signature = req.header('x-dropbox-signature');
     const expectedSignature = crypto
@@ -57,59 +131,33 @@ app.post('/webhook', async (req, res) => {
       .digest('hex');
 
     if (signature !== expectedSignature) {
-      console.log('🚨 Ugyldig signatur - anmodning afvist');
+      console.log('🚨 Ugyldig signatur!');
       return res.status(403).send('Uautoriseret');
     }
 
-    // Behandling af konti
-    const accounts = req.body.list_folder?.accounts || [];
-    console.log(`🔎 ${accounts.length} konti med ændringer`);
+    // Behandling af filændringer
+    const changes = req.body.list_folder;
+    if (!changes || !changes.entries.length) {
+      console.log('ℹ️ Ingen ændringer at behandle');
+      return res.sendStatus(200);
+    }
 
-    for (const accountId of accounts) {
-      console.log(`\n💼 Behandler konto: ${accountId}`);
-      
-      try {
-        let cursor = cursors[accountId];
-        
-        // Hvis ingen cursor findes, hent initial
-        if (!cursor) {
-          console.log('⚙️ Henter initial cursor');
-          const initResponse = await dropbox({
-            resource: 'files/list_folder',
-            parameters: { path: '/csv-filer' }
-          }, (err, result) => {}).promise();
+    // Behandler hver CSV fil
+    for (const entry of changes.entries) {
+      if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
+        try {
+          console.log(`\n🔎 Behandler fil: ${entry.name}`);
           
-          cursor = initResponse.cursor;
-          cursors[accountId] = cursor;
-        }
-
-        // Hent ændringer
-        const changes = await getChanges(cursor);
-        
-        // Opdater cursor
-        cursors[accountId] = changes.cursor;
-        console.log(`🔄 Opdateret cursor: ${changes.cursor.slice(0, 15)}...`);
-
-        // Behandler filændringer
-        if (changes?.entries?.length > 0) {
-          console.log(`📂 ${changes.entries.length} ændrede filer:`);
+          // Hent og processer fil
+          const csvContent = await downloadCSVFile(entry.path_display);
+          const data = await parseCSVContent(csvContent);
+          await moveCSVFile(entry.path_display, '/used csv-files');
           
-          changes.entries.forEach(entry => {
-            if (entry?.['.tag'] === 'file' && entry?.name?.endsWith?.('.csv')) {
-              console.log(`\n📄 CSV-fil fundet: ${entry.name}`);
-              console.log('Sti:', entry.path_display);
-              console.log('Ændringstid:', entry.server_modified);
-              
-              // ======== TILFØJ DIN BEHANDLINGSLOGIK HER ========
-              // Eksempel: Hent fil, processer CSV, generer faktura
-            }
-          });
-        } else {
-          console.log('ℹ️ Ingen nye filændringer');
+          // Log data
+          console.log('📦 Behandlet data:', data);
+        } catch (error) {
+          console.error(`💥 Fejl i filbehandling: ${error.message}`);
         }
-
-      } catch (error) {
-        console.error(`💥 Fejl i konto ${accountId}:`, error.message);
       }
     }
 
@@ -123,9 +171,8 @@ app.post('/webhook', async (req, res) => {
 // ================== SERVER START ==================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Server kører på port ${PORT}`);
-  console.log(`🌐 Webhook URL: ${process.env.RAILWAY_STATIC_URL}/webhook`);
-  console.log('🔧 Konfiguration:');
-  console.log('- Dropbox App Secret:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌');
-  console.log('- Dropbox Token:', process.env.DROPBOX_TOKEN ? '✅' : '❌');
+  console.log(`\n🚀 Server startet på port ${PORT}`);
+  console.log('🔧 Kontrollerer miljøvariabler:');
+  console.log('- DROPBOX_APP_SECRET:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌ Mangler');
+  console.log('- DROPBOX_TOKEN:', process.env.DROPBOX_TOKEN ? '✅' : '❌ Mangler');
 });
