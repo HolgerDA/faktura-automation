@@ -47,37 +47,41 @@ async function downloadCSVFile(filePath) {
 }
 
 async function moveCSVFile(sourcePath, targetFolder) {
-  return new Promise((resolve, reject) => {
-    console.log(`🚚 Flytter fil til ${targetFolder}...`);
-    
-    const originalName = path.basename(sourcePath);
-    const baseName = path.basename(originalName, '.csv');
-    const ext = path.extname(originalName) || '.csv';
-    const timestamp = Date.now();
-    const newName = `${baseName}_${timestamp}${ext}`;
-    const destinationPath = `${targetFolder}/${newName}`;
-
-    dropbox({
-      resource: 'files/move_v2',
-      parameters: {
-        from_path: sourcePath,
-        to_path: destinationPath,
-        autorename: false
-      }
-    }, (err, result) => {
-      if (err) {
-        console.error('❌ Flyttefejl:', err);
-        return reject(err);
-      }
-      console.log(`✅ Fil flyttet til: ${destinationPath}`);
-      resolve(result);
+    return new Promise((resolve, reject) => {
+      console.log(`🚚 Flytter fil til ${targetFolder}...`);
+      
+      // Opdel filnavn i navn og extension
+      const originalName = path.basename(sourcePath);
+      const baseName = path.basename(originalName, '.csv');
+      const ext = path.extname(originalName) || '.csv';
+      const timestamp = Date.now();
+      
+      // Generer unikt filnavn med tidsstempel
+      const newName = `${baseName}_${timestamp}${ext}`;
+      const destinationPath = `${targetFolder}/${newName}`;
+  
+      dropbox({
+        resource: 'files/move_v2',
+        parameters: {
+          from_path: sourcePath,
+          to_path: destinationPath,
+          autorename: false
+        }
+      }, (err, result) => {
+        if (err) {
+          console.error('❌ Flyttefejl:', err);
+          return reject(err);
+        }
+        console.log(`✅ Fil flyttet til: ${destinationPath}`);
+        resolve(result);
+      });
     });
-  });
-}
+  }
 
 // ================== WEBHOOK HANDLERING ==================
 app.post('/webhook', async (req, res) => {
   try {
+    // Valider signatur
     const signature = req.header('x-dropbox-signature');
     const expectedSignature = crypto
       .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
@@ -101,6 +105,7 @@ app.post('/webhook', async (req, res) => {
         parameters: { path: folderPath, limit: 10 }
       }, (err, result) => {
         console.log('📡 Rå API værdier:');
+        
         if (result?.entries) {
           result.entries.forEach((entry, index) => {
             console.log(`📄 Fil ${index + 1}:`);
@@ -111,7 +116,10 @@ app.post('/webhook', async (req, res) => {
             console.log('- Type:', entry['.tag']);
             console.log('------------------------');
           });
+        } else {
+          console.log('❌ Ingen filer fundet i API respons');
         }
+    
         if (err) reject(err);
         else resolve(result);
       });
@@ -145,31 +153,36 @@ app.post('/webhook', async (req, res) => {
       const csvContent = await downloadCSVFile(latestFile.path_display);
       const data = await parseCSVContent(csvContent);
 
-      // Udpakning af data
+      // NY KODE START ===============================
+      // Ekstraher og formatér værdierne fra CSV
       const {
-        ProductId,
-        Style,
-        Name,
-        Size,
-        Amount,
-        Locations,
-        PurchasePriceDKK,
-        RRP,
-        TariffCode,
-        CountryOfOrigin
+        'Product Id': productId,
+        'Style': style,
+        'Name': name,
+        'Size': size,
+        'Amount': amount,
+        'Locations': locations,
+        'Purchase Price DKK': purchasePrice,
+        'RRP': rrp,
+        'Tariff Code': tariffCode,
+        'Country of Origin': countryOrigin
       } = data;
 
       console.log('\n📋 Udpakket CSV-data:');
-      console.log(`Product ID: ${ProductId}`);
-      console.log(`Style: ${Style}`);
-      console.log(`Name: ${Name}`);
-      console.log(`Size: ${Size}`);
-      console.log(`Amount: ${Amount}`);
-      console.log(`Locations: ${Locations}`);
-      console.log(`Purchase Price DKK: ${PurchasePriceDKK}`);
-      console.log(`RRP: ${RRP}`);
-      console.log(`Tariff Code: ${TariffCode}`);
-      console.log(`Country of Origin: ${CountryOfOrigin}\n`);
+      console.log(`Product ID: ${productId}`);
+      console.log(`Style: ${style}`);
+      console.log(`Name: ${name}`);
+      console.log(`Size: ${size}`);
+      console.log(`Amount: ${amount}`);
+      console.log(`Locations: ${locations}`);
+      console.log(`Purchase Price DKK: ${purchasePrice}`);
+      console.log(`RRP: ${rrp}`);
+      console.log(`Tariff Code: ${tariffCode}`);
+      console.log(`Country of Origin: ${countryOrigin}\n`);
+
+      // Her kan du bruge variablerne i andre funktioner
+      // eksempel: opretOrdre(productId, style, name...)
+      // NY KODE SLUT ===============================
 
       await moveCSVFile(latestFile.path_display, '/used csv-files');
       console.log('✅ Behandling gennemført');
@@ -185,32 +198,17 @@ app.post('/webhook', async (req, res) => {
     res.status(500).send('Serverfejl');
   }
 });
-
 // ================== PARSE FUNKTION ==================
 function parseCSVContent(csvData) {
   return new Promise((resolve, reject) => {
     const results = [];
-    const parser = csv({
-      headers: [
-        'ProductId',
-        'Style',
-        'Name',
-        'Size',
-        'Amount',
-        'Locations',
-        'PurchasePriceDKK',
-        'RRP',
-        'TariffCode',
-        'CountryOfOrigin'
-      ],
-      skipLines: 0
-    })
-    .on('data', (data) => results.push(data))
-    .on('end', () => {
-      if (results.length === 0) return reject(new Error('Ingen data i CSV'));
-      resolve(results[0]);
-    })
-    .on('error', reject);
+    const parser = csv()
+      .on('data', (data) => results.push(data))
+      .on('end', () => {
+        if (results.length === 0) return reject(new Error('Ingen data i CSV'));
+        resolve(results[0]);
+      })
+      .on('error', reject);
 
     parser.write(csvData);
     parser.end();
@@ -228,8 +226,8 @@ async function checkFolder() {
       }, (err, res) => err ? reject(err) : resolve(res));
     });
 
-    console.log('📂 Mappeindhold:', result?.entries?.length ? `${result.entries.length} filer` : 'Tom');
-    
+    // KORRIGERET: Fjern .result
+   
   } catch (error) {
     console.error('❌ Mappetjek fejlede:', error.message);
     console.error('💡 Tjek:');
