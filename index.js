@@ -88,15 +88,22 @@ app.post('/webhook', async (req, res) => {
 
     console.log('🔔 Webhook modtaget - starter behandling');
 
-    // List folder
+    // NYT: Tilføj forsinkelse
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // List folder med debug logging
+    const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
+    console.log('🔍 Checking folder:', folderPath);
+
     const folderList = await new Promise((resolve, reject) => {
       dropbox({
         resource: 'files/list_folder',
         parameters: {
-          path: '/csv-filer',
-          limit: 10 // Øget limit for safety
+          path: folderPath,
+          limit: 10
         }
       }, (err, result) => {
+        console.log('📡 Dropbox API response:', err || result); // NY debug linje
         if (err) reject(err);
         else resolve(result);
       });
@@ -162,11 +169,30 @@ function parseCSVContent(csvData) {
   });
 }
 
+// NYT: Mappetjek ved opstart
+async function checkFolder() {
+  try {
+    const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
+    const result = await new Promise((resolve, reject) => {
+      dropbox({
+        resource: 'files/list_folder',
+        parameters: { path: folderPath }
+      }, (err, res) => err ? reject(err) : resolve(res));
+    });
+    console.log('📂 Folder content check:', result?.result?.entries);
+  } catch (error) {
+    console.error('❌ Folder check failed:', error);
+  }
+}
+
 // ================== SERVER START ==================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 Server startet på port ${PORT}`);
   console.log('🔧 Kontrollerer miljøvariabler:');
   console.log('- DROPBOX_APP_SECRET:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌ Mangler');
   console.log('- DROPBOX_TOKEN:', process.env.DROPBOX_TOKEN ? '✅' : '❌ Mangler');
+  
+  // NYT: Kør mappetjek ved opstart
+  await checkFolder();
 });
