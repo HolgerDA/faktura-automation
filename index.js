@@ -76,7 +76,7 @@ app.post('/webhook', async (req, res) => {
           console.log('⚙️ Henter initial cursor');
           const initResponse = await dropbox({
             resource: 'files/list_folder',
-            parameters: { path: '' }
+            parameters: { path: '/csv-filer' }
           }, (err, result) => {}).promise();
           
           cursor = initResponse.cursor;
