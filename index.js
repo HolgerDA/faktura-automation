@@ -200,20 +200,30 @@ app.post('/webhook', async (req, res) => {
   });
 // ================== PARSE FUNKTION ==================
 function parseCSVContent(csvData) {
-  return new Promise((resolve, reject) => {
-    const results = [];
-    const parser = csv()
-      .on('data', (data) => results.push(data))
+    return new Promise((resolve, reject) => {
+      const results = [];
+      const parser = csv({
+        separator: ',', // Eksplicit angiv separator
+        skipLines: 1,   // Spring header-række over (a1)
+        strict: true     // Kræv samme antal kolonner i alle rækker
+      })
+      .on('headers', (headers) => {
+        console.log('📋 CSV Headers:', headers);
+      })
+      .on('data', (data) => {
+        console.log('📖 Rå CSV række:', data);
+        results.push(data);
+      })
       .on('end', () => {
         if (results.length === 0) return reject(new Error('Ingen data i CSV'));
-        resolve(results[0]);
+        resolve(results[0]); // Første datarække (a2)
       })
       .on('error', reject);
-
-    parser.write(csvData);
-    parser.end();
-  });
-}
+  
+      parser.write(csvData);
+      parser.end();
+    });
+  }
 
 // ================== MAPPETJEK ==================
 async function checkFolder() {
