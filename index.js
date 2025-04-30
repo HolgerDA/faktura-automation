@@ -87,36 +87,30 @@ app.post('/webhook', async (req, res) => {
     }
 
     console.log('🔔 Webhook modtaget - starter behandling');
-
-    // NYT: Tilføj forsinkelse
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // List folder med debug logging
     const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
     console.log('🔍 Checking folder:', folderPath);
 
     const folderList = await new Promise((resolve, reject) => {
       dropbox({
         resource: 'files/list_folder',
-        parameters: {
-          path: folderPath,
-          limit: 10
-        }
+        parameters: { path: folderPath, limit: 10 }
       }, (err, result) => {
-        console.log('📡 Dropbox API response:', err || result); // NY debug linje
+        console.log('📡 Raw API response:', JSON.stringify(result, null, 2));
         if (err) reject(err);
         else resolve(result);
       });
     });
 
-    // Tjek resultatstruktur
-    if (!folderList?.result?.entries?.length) {
+    // KORRIGERET: Fjern .result da responsen ikke er nested
+    if (!folderList?.entries?.length) {
       console.log('📭 Mappen er tom');
       return res.sendStatus(200);
     }
 
-    // Vælg den nyeste CSV fil
-    const latestFile = folderList.result.entries
+    // KORRIGERET: Brug direkte entries fra responsen
+    const latestFile = folderList.entries
       .filter(file => 
         file['.tag'] === 'file' && 
         file.name.toLowerCase().endsWith('.csv')
@@ -131,8 +125,14 @@ app.post('/webhook', async (req, res) => {
     }
 
     console.log('🎯 Valgt fil:', latestFile.name);
+    console.log('📌 Fil detaljer:', JSON.stringify(latestFile, null, 2));
 
-    // Hent og processer fil
+    // Valider path_display
+    if (!latestFile.path_display) {
+      console.error('🚫 Manglende sti i filobjekt');
+      return res.status(500).send('Ugyldig filsti');
+    }
+
     try {
       const csvContent = await downloadCSVFile(latestFile.path_display);
       const data = await parseCSVContent(csvContent);
@@ -150,16 +150,14 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ================== TILFØJ PARSE FUNKTION ==================
+// ================== PARSE FUNKTION ==================
 function parseCSVContent(csvData) {
   return new Promise((resolve, reject) => {
     const results = [];
     const parser = csv()
       .on('data', (data) => results.push(data))
       .on('end', () => {
-        if (results.length === 0) {
-          return reject(new Error('Ingen data i CSV'));
-        }
+        if (results.length === 0) return reject(new Error('Ingen data i CSV'));
         resolve(results[0]);
       })
       .on('error', reject);
@@ -169,7 +167,7 @@ function parseCSVContent(csvData) {
   });
 }
 
-// NYT: Mappetjek ved opstart
+// ================== MAPPETJEK ==================
 async function checkFolder() {
   try {
     const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
@@ -179,9 +177,17 @@ async function checkFolder() {
         parameters: { path: folderPath }
       }, (err, res) => err ? reject(err) : resolve(res));
     });
-    console.log('📂 Folder content check:', result?.result?.entries);
+
+    // KORRIGERET: Fjern .result
+    console.log('📂 Folder content:', result?.entries || 'Ingen filer');
+    console.log('🔄 Dropbox cursor:', result?.cursor || 'Ingen cursor');
+    
   } catch (error) {
-    console.error('❌ Folder check failed:', error);
+    console.error('❌ Mappetjek fejlede:', error.message);
+    console.error('💡 Tjek:');
+    console.error('- Dropbox token rettigheder');
+    console.error('- Mappesti eksistens');
+    console.error('- Netværksforbindelse');
   }
 }
 
@@ -193,6 +199,5 @@ app.listen(PORT, async () => {
   console.log('- DROPBOX_APP_SECRET:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌ Mangler');
   console.log('- DROPBOX_TOKEN:', process.env.DROPBOX_TOKEN ? '✅' : '❌ Mangler');
   
-  // NYT: Kør mappetjek ved opstart
   await checkFolder();
 });
