@@ -41,27 +41,26 @@ app.post('/webhook', async (req, res) => {
         console.log('🚨 Ugyldig signatur!');
         return res.status(403).send('Ulovlig anmodning');
       }
-
-    console.log('🔍 Kigger efter CSV-filer...');
-    const changes = req.body.list_folder.entries;
-    
-    changes.forEach(entry => {
-      if (entry['.tag'] === 'file' && entry.name.endsWith('.csv')) {
-        console.log('📂 Ny CSV fil:', entry.name);
-        // Her kommer din CSV-behandling senere
-      }
-    });
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.log('💥 Fejl:', error);
-    res.status(500).send('Serverfejl');
-  }
-});
+  
+      console.log('🔍 Kigger efter ændringer...');
+      
+      // KORREKT DATAUDTRÆK
+      const accounts = req.body.list_folder?.accounts || [];
+      
+      accounts.forEach(accountId => {
+        console.log('💼 Konto med ændringer:', accountId);
+        // Her skal du kalde Dropbox API for at hente faktiske filændringer
+      });
+  
+      res.sendStatus(200);
+    } catch (error) {
+      console.log('💥 Fejl:', error);
+      res.status(500).send('Serverfejl');
+    }
+  });
 
 // ====== Start server ======
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server klar på port ${PORT}`);
   console.log(`🌐 Webhook URL: https://faktura-automation-production.up.railway.app/webhook`);
-});
