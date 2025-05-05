@@ -97,14 +97,34 @@ async function archiveProcessedFile(sourcePath) {
 function parseCSVContent(csvData) {
     return new Promise((resolve, reject) => {
       const results = [];
-      const parser = csv();
+      const parser = csv({
+        separator: ',',
+        quote: '"',
+        headers: [
+          'ProductId',
+          'Style',
+          'Name',
+          'Size',
+          'Amount',
+          'Locations',
+          'PurchasePriceDKK',
+          'RRP',
+          'TariffCode',
+          'CountryOfOrigin'
+        ]
+      });
   
       parser
         .on('data', (data) => results.push(data))
-        .on('end', () => resolve(results))
+        .on('end', () => {
+          if (results.length === 0) {
+            reject(new Error('Empty CSV file'));
+          } else {
+            resolve(results);
+          }
+        })
         .on('error', reject);
   
-      // Skriv data til parseren korrekt
       parser.write(csvData);
       parser.end();
     });
@@ -157,7 +177,34 @@ app.post('/webhook', async (req, res) => {
 
     const targetFile = csvFiles[0];
     const csvContent = await downloadCSVFile(targetFile.path_display);
-    const parsedData = await parseCSVContent(csvContent);
+    const parsedRows = await parseCSVContent(csvContent);
+    const firstRow = parsedRows[0];
+
+    // Destructurer værdierne
+    const {
+  ProductId,
+  Style,
+  Name,
+  Size,
+  Amount,
+  Locations,
+  PurchasePriceDKK,
+  RRP,
+  TariffCode,
+  CountryOfOrigin
+} = firstRow;
+
+console.log('Ekstraherede værdier:');
+console.log('Product ID:', ProductId);
+console.log('Style:', Style);
+console.log('Produktnavn:', Name);
+console.log('Størrelse:', Size);
+console.log('Antal:', Amount);
+console.log('Lokation:', Locations);
+console.log('Indkøbspris:', PurchasePriceDKK);
+console.log('RRP:', RRP);
+console.log('Toldkode:', TariffCode);
+console.log('Oprindelsesland:', CountryOfOrigin);
 
     // Log raw CSV data
     console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
