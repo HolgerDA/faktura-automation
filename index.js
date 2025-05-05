@@ -1,3 +1,6 @@
+// ======================
+// Environment Setup
+// ======================
 require('dotenv').config();
 const express = require('express');
 const Dropbox = require('dropbox-v2-api');
@@ -7,243 +10,196 @@ const axios = require('axios');
 const path = require('path');
 const app = express();
 
-// ================== KONFIGURATION ==================
+// ======================
+// Configuration Constants
+// ======================
+const CONFIG = {
+  SERVER_PORT: process.env.PORT || 8080,
+  DROPBOX: {
+    TOKEN: process.env.DROPBOX_TOKEN,
+    APP_SECRET: process.env.DROPBOX_APP_SECRET,
+    INPUT_FOLDER: process.env.DROPBOX_INPUT_FOLDER || '/csv-filer',
+    PROCESSED_FOLDER: process.env.DROPBOX_PROCESSED_FOLDER || '/processed-csv-files'
+  },
+  SECURITY: {
+    WEBHOOK_DELAY: 2000 // 2 second processing delay
+  }
+};
+
+// ======================
+// Dropbox Client Setup
+// ======================
+const dropbox = Dropbox.authenticate({
+  token: CONFIG.DROPBOX.TOKEN
+});
+
+// ======================
+// Middleware Configuration
+// ======================
 app.use(express.json({
-  verify: (req, res, buf) => {
+  verify: (req, _, buf) => {
     req.rawBody = buf.toString();
   }
 }));
 
-const dropbox = Dropbox.authenticate({
-  token: process.env.DROPBOX_TOKEN
-});
+// ======================
+// File Operations
+// ======================
 
-// ================== HJÆLPEFUNKTIONER ==================
-
+/**
+ * Downloads CSV file from Dropbox
+ * @param {string} filePath - Full Dropbox path to CSV file
+ */
 async function downloadCSVFile(filePath) {
   return new Promise((resolve, reject) => {
-    console.log(`📥 Henter fil: ${filePath}`);
-    
     dropbox({
       resource: 'files/get_temporary_link',
       parameters: { path: filePath }
     }, (err, result) => {
-      if (err) {
-        console.error('❌ Fejl ved hentning af link:', err);
-        return reject(err);
-      }
-
+      if (err) return reject(err);
       axios.get(result.link)
-        .then(response => {
-          console.log(`✅ Fil hentet (${response.data.length} tegn)`);
-          resolve(response.data);
-        })
-        .catch(error => {
-          console.error('❌ Download fejl:', error);
-          reject(error);
-        });
+        .then(response => resolve(response.data))
+        .catch(reject);
     });
   });
 }
 
-async function moveCSVFile(sourcePath, targetFolder) {
-    return new Promise((resolve, reject) => {
-      console.log(`🚚 Flytter fil til ${targetFolder}...`);
-      
-      // Opdel filnavn i navn og extension
-      const originalName = path.basename(sourcePath);
-      const baseName = path.basename(originalName, '.csv');
-      const ext = path.extname(originalName) || '.csv';
-      const timestamp = Date.now();
-      
-      // Generer unikt filnavn med tidsstempel
-      const newName = `${baseName}_${timestamp}${ext}`;
-      const destinationPath = `${targetFolder}/${newName}`;
-  
-      dropbox({
-        resource: 'files/move_v2',
-        parameters: {
-          from_path: sourcePath,
-          to_path: destinationPath,
-          autorename: false
-        }
-      }, (err, result) => {
-        if (err) {
-          console.error('❌ Flyttefejl:', err);
-          return reject(err);
-        }
-        console.log(`✅ Fil flyttet til: ${destinationPath}`);
-        resolve(result);
-      });
-    });
-  }
+/**
+ * Moves processed file to archive folder
+ * @param {string} sourcePath - Original file path
+ */
+async function archiveProcessedFile(sourcePath) {
+  return new Promise((resolve, reject) => {
+    const originalName = path.basename(sourcePath);
+    const timestamp = Date.now();
+    const destinationPath = `${CONFIG.DROPBOX.PROCESSED_FOLDER}/${originalName}_${timestamp}.csv`;
 
-// ================== WEBHOOK HANDLERING ==================
+    dropbox({
+      resource: 'files/move_v2',
+      parameters: {
+        from_path: sourcePath,
+        to_path: destinationPath,
+        autorename: false
+      }
+    }, (err, result) => {
+      err ? reject(err) : resolve(result);
+    });
+  });
+}
+
+// ======================
+// CSV Processing
+// ======================
+
+/**
+ * Parses CSV content to JSON
+ * @param {string} csvData - Raw CSV content
+ */
+function parseCSVContent(csvData) {
+  return new Promise((resolve, reject) => {
+    const results = [];
+    csv()
+      .on('data', (data) => results.push(data))
+      .on('end', () => resolve(results))
+      .on('error', reject)
+      .write(csvData)
+      .end();
+  });
+}
+
+// ======================
+// Webhook Handler
+// ======================
 app.post('/webhook', async (req, res) => {
   try {
-    // Valider signatur
+    // Validate webhook signature
     const signature = req.header('x-dropbox-signature');
     const expectedSignature = crypto
-      .createHmac('sha256', process.env.DROPBOX_APP_SECRET)
+      .createHmac('sha256', CONFIG.DROPBOX.APP_SECRET)
       .update(req.rawBody)
       .digest('hex');
 
     if (signature !== expectedSignature) {
-      console.log('🚨 Ugyldig signatur!');
-      return res.status(403).send('Uautoriseret');
+      return res.status(403).send('Unauthorized');
     }
 
-    console.log('🔔 Webhook modtaget - starter behandling');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Allow time for file processing in Dropbox
+    await new Promise(resolve => 
+      setTimeout(resolve, CONFIG.SECURITY.WEBHOOK_DELAY)
+    );
 
-    const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
-    console.log('🔍 Checking folder:', folderPath);
-
-    const folderList = await new Promise((resolve, reject) => {
+    // Get latest CSV file
+    const folderContents = await new Promise((resolve, reject) => {
       dropbox({
         resource: 'files/list_folder',
-        parameters: { path: folderPath, limit: 10 }
-      }, (err, result) => {
-        console.log('📡 Rå API værdier:');
-        
-        if (result?.entries) {
-          result.entries.forEach((entry, index) => {
-            console.log(`📄 Fil ${index + 1}:`);
-            console.log('- Navn:', entry.name);
-            console.log('- Sti:', entry.path_lower);
-            console.log('- Størrelse:', entry.size, 'bytes');
-            console.log('- Sidst ændret:', entry.server_modified);
-            console.log('- Type:', entry['.tag']);
-            console.log('------------------------');
-          });
-        } else {
-          console.log('❌ Ingen filer fundet i API respons');
+        parameters: { 
+          path: CONFIG.DROPBOX.INPUT_FOLDER,
+          limit: 10 
         }
-    
-        if (err) reject(err);
-        else resolve(result);
-      });
+      }, (err, result) => err ? reject(err) : resolve(result));
     });
 
-    if (!folderList?.entries?.length) {
-      console.log('📭 Mappen er tom');
-      return res.sendStatus(200);
-    }
-
-    const latestFile = folderList.entries
+    const csvFiles = folderContents.entries
       .filter(file => 
         file['.tag'] === 'file' && 
         file.name.toLowerCase().endsWith('.csv')
       )
       .sort((a, b) => 
         new Date(b.server_modified) - new Date(a.server_modified)
-      )[0];
+      );
 
-    if (!latestFile) {
-      console.log('⏭️ Ingen CSV-filer at behandle');
-      return res.sendStatus(200);
+    if (csvFiles.length === 0) {
+      return res.status(200).send('No files to process');
     }
 
-    if (!latestFile.path_display) {
-      console.error('🚫 Manglende sti i filobjekt');
-      return res.status(500).send('Ugyldig filsti');
-    }
+    const targetFile = csvFiles[0];
+    const csvContent = await downloadCSVFile(targetFile.path_display);
+    const parsedData = await parseCSVContent(csvContent);
 
-    try {
-      const csvContent = await downloadCSVFile(latestFile.path_display);
-      const data = await parseCSVContent(csvContent);
+    // Log raw CSV data
+    console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
 
-      // NY KODE START ===============================
-      // Ekstraher og formatér værdierne fra CSV
-      const {
-        'Product Id': productId,
-        'Style': style,
-        'Name': name,
-        'Size': size,
-        'Amount': amount,
-        'Locations': locations,
-        'Purchase Price DKK': purchasePrice,
-        'RRP': rrp,
-        'Tariff Code': tariffCode,
-        'Country of Origin': countryOrigin
-      } = data;
-
-      console.log('\n📋 Udpakket CSV-data:');
-      console.log(`Product ID: ${productId}`);
-      console.log(`Style: ${style}`);
-      console.log(`Name: ${name}`);
-      console.log(`Size: ${size}`);
-      console.log(`Amount: ${amount}`);
-      console.log(`Locations: ${locations}`);
-      console.log(`Purchase Price DKK: ${purchasePrice}`);
-      console.log(`RRP: ${rrp}`);
-      console.log(`Tariff Code: ${tariffCode}`);
-      console.log(`Country of Origin: ${countryOrigin}\n`);
-
-      // Her kan du bruge variablerne i andre funktioner
-      // eksempel: opretOrdre(productId, style, name...)
-      // NY KODE SLUT ===============================
-
-      await moveCSVFile(latestFile.path_display, '/used csv-files');
-      console.log('✅ Behandling gennemført');
-
-    } catch (error) {
-      console.error('💥 Fejl under behandling:', error);
-      return res.status(500).send('Behandlingsfejl');
-    }
-
-    res.sendStatus(200);
+    // Archive processed file
+    await archiveProcessedFile(targetFile.path_display);
+    
+    res.status(200).send('Processing complete');
   } catch (error) {
-    console.error('‼️ Kritisk fejl:', error);
-    res.status(500).send('Serverfejl');
+    console.error('Processing error:', error);
+    res.status(500).send('Internal server error');
   }
 });
-// ================== PARSE FUNKTION ==================
-function parseCSVContent(csvData) {
-  return new Promise((resolve, reject) => {
-    const results = [];
-    const parser = csv()
-      .on('data', (data) => results.push(data))
-      .on('end', () => {
-        if (results.length === 0) return reject(new Error('Ingen data i CSV'));
-        resolve(results[0]);
-      })
-      .on('error', reject);
 
-    parser.write(csvData);
-    parser.end();
+// ======================
+// Server Initialization
+// ======================
+async function initializeServer() {
+  // Validate environment variables
+  if (!CONFIG.DROPBOX.TOKEN || !CONFIG.DROPBOX.APP_SECRET) {
+    throw new Error('Missing required Dropbox environment variables');
+  }
+
+  // Verify Dropbox connection
+  try {
+    await new Promise((resolve, reject) => {
+      dropbox({
+        resource: 'files/list_folder',
+        parameters: { path: CONFIG.DROPBOX.INPUT_FOLDER }
+      }, (err, res) => err ? reject(err) : resolve(res));
+    });
+  } catch (error) {
+    throw new Error(`Dropbox connection failed: ${error.message}`);
+  }
+
+  app.listen(CONFIG.SERVER_PORT, () => {
+    console.log(`Server running on port ${CONFIG.SERVER_PORT}`);
+    console.log('Configured folders:');
+    console.log('- Input:', CONFIG.DROPBOX.INPUT_FOLDER);
+    console.log('- Archive:', CONFIG.DROPBOX.PROCESSED_FOLDER);
   });
 }
 
-// ================== MAPPETJEK ==================
-async function checkFolder() {
-  try {
-    const folderPath = process.env.DROPBOX_INPUT_FOLDER || '/csv-filer';
-    const result = await new Promise((resolve, reject) => {
-      dropbox({
-        resource: 'files/list_folder',
-        parameters: { path: folderPath }
-      }, (err, res) => err ? reject(err) : resolve(res));
-    });
-
-    // KORRIGERET: Fjern .result
-   
-  } catch (error) {
-    console.error('❌ Mappetjek fejlede:', error.message);
-    console.error('💡 Tjek:');
-    console.error('- Dropbox token rettigheder');
-    console.error('- Mappesti eksistens');
-    console.error('- Netværksforbindelse');
-  }
-}
-
-// ================== SERVER START ==================
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, async () => {
-  console.log(`\n🚀 Server startet på port ${PORT}`);
-  console.log('🔧 Kontrollerer miljøvariabler:');
-  console.log('- DROPBOX_APP_SECRET:', process.env.DROPBOX_APP_SECRET ? '✅' : '❌ Mangler');
-  console.log('- DROPBOX_TOKEN:', process.env.DROPBOX_TOKEN ? '✅' : '❌ Mangler');
-  
-  await checkFolder();
+// Start the application
+initializeServer().catch(error => {
+  console.error('Server initialization failed:', error.message);
+  process.exit(1);
 });
