@@ -162,17 +162,18 @@ app.post('/webhook', async (req, res) => {
     // Log raw CSV data
     console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
     // --- map til "venlige" variabelnavne ---
+// --- map til "venlige" variabelnavne uden replace/parseFloat ---
 const mapped = parsedData.map(item => ({
-    productId:            item['Product Id'],
-    style:                item.Style,
-    productName:          item.Name,
-    size:                 item.Size,
-    amount:               Number(item.Amount),
-    locations:            item.Locations,
-    purchasePriceDKK:     parseFloat(item['Purchase Price DKK'].replace(',', '.')),
-    rrp:                  parseFloat(item.RRP.replace(',', '.')),
-    tariffCode:           item['Tariff Code'],
-    countryOfOrigin:      item['Country of Origin']
+    productId:       item['Product Id'],
+    style:           item.Style,
+    productName:     item.Name,
+    size:            item.Size,
+    amount:          item.Amount,            // rå string
+    locations:       item.Locations,
+    purchasePriceDKK: item['Purchase Price DKK'],  // rå string, fx "\"27,00\""
+    rrp:             item.RRP,               // rå string, fx "\"199,00\""
+    tariffCode:      item['Tariff Code'],
+    countryOfOrigin: item['Country of Origin']
   }));
   
   // --- tag første record ud til individuelle variabler ---
