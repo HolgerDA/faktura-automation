@@ -86,126 +86,128 @@ async function archiveProcessedFile(sourcePath) {
     });
   });
 }
-
 // ======================
-// CSV Processing
+// CSV Processing (opdateret)
 // ======================
 
-/**
- * Parses CSV content to JSON
- */
 function parseCSVContent(csvData) {
     return new Promise((resolve, reject) => {
       const results = [];
-      const parser = csv({ separator: ';' });
+      const parser = csv({
+        separator: ';',
+        mapHeaders: ({ header }) => {
+          return header
+            .trim()
+            .replace(/["\\]/g, '')    // fjern quotes & backslashes
+            .replace(/\s+/g, '_')     // spaces → underscore
+            .replace(/[^a-zA-Z0-9_]/g, '') // alfanumerisk + underscore only
+            .toLowerCase();
+        },
+        mapValues: ({ value }) => {
+          return typeof value === 'string'
+            ? value.replace(/^"|"$/g, '').trim()
+            : value;
+        }
+      });
   
       parser
-        .on('data', (data) => results.push(data))
+        .on('data', data => results.push(data))
         .on('end', () => resolve(results))
         .on('error', reject);
   
-      // Skriv data til parseren korrekt
-      parser.write(csvData);
+      // Fjern overflødige quotes fra hele CSV-indholdet
+      const cleanedCsv = csvData
+        .split('\n')
+        .map(line => line.trim().replace(/^"|"$/g, ''))
+        .join('\n');
+  
+      parser.write(cleanedCsv);
       parser.end();
     });
   }
-
-// ======================
-// Webhook Handler
-// ======================
-app.post('/webhook', async (req, res) => {
-  try {
-    // Validate webhook signature
-    const signature = req.header('x-dropbox-signature');
-    const expectedSignature = crypto
-      .createHmac('sha256', CONFIG.DROPBOX.APP_SECRET)
-      .update(req.rawBody)
-      .digest('hex');
-
-    if (signature !== expectedSignature) {
-      return res.status(403).send('Unauthorized');
+  
+  // ======================
+  // Webhook Handler (opdateret del)
+  // ======================
+  app.post('/webhook', async (req, res) => {
+    try {
+      // Validate webhook signature
+      const signature = req.header('x-dropbox-signature');
+      const expectedSignature = crypto
+        .createHmac('sha256', CONFIG.DROPBOX.APP_SECRET)
+        .update(req.rawBody)
+        .digest('hex');
+  
+      if (signature !== expectedSignature) {
+        return res.status(403).send('Unauthorized');
+      }
+  
+      // Vent lidt for at Dropbox når at færdigbehandle filerne
+      await new Promise(r => setTimeout(r, CONFIG.SECURITY.WEBHOOK_DELAY));
+  
+      // Hent seneste CSV i input-mappen
+      const folderContents = await new Promise((resolve, reject) => {
+        dropbox({
+          resource: 'files/list_folder',
+          parameters: { 
+            path: CONFIG.DROPBOX.INPUT_FOLDER,
+            limit: 10 
+          }
+        }, (err, result) => err ? reject(err) : resolve(result));
+      });
+  
+      const csvFiles = folderContents.entries
+        .filter(f => f['.tag'] === 'file' && f.name.toLowerCase().endsWith('.csv'))
+        .sort((a, b) => new Date(b.server_modified) - new Date(a.server_modified));
+  
+      if (csvFiles.length === 0) {
+        return res.status(200).send('No files to process');
+      }
+  
+      const targetFile = csvFiles[0];
+      const csvContent = await downloadCSVFile(targetFile.path_display);
+      const parsedData = await parseCSVContent(csvContent);
+  
+      console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
+  
+      // Data transformation med korrekt typekonvertering
+      const products = parsedData.map(item => {
+        const parseNumber = str => {
+          const cleaned = str.replace(/[^0-9,]/g, '').replace(',', '.');
+          return cleaned ? parseFloat(cleaned) : 0;
+        };
+  
+        return {
+          productId:         item.product_id,
+          style:             item.style,
+          productName:       item.name,
+          size:              item.size,
+          amount:            parseInt(item.amount, 10) || 0,
+          locations:         item.locations.split('-').map(l => l.trim()),
+          purchasePriceDKK:  parseNumber(item.purchase_price_dkk),
+          rrp:               parseNumber(item.rrp),
+          tariffCode:        item.tariff_code,
+          countryOfOrigin:   item.country_of_origin
+        };
+      });
+  
+      console.log('Processerede produkter:', JSON.stringify(products, null, 2));
+  
+      const totalValue = products
+        .reduce((sum, p) => sum + (p.amount * p.purchasePriceDKK), 0);
+  
+      console.log(`Total lagerbeholdning værdi: ${totalValue.toFixed(2)} DKK`);
+  
+      // Flyt fil til arkiv
+      await archiveProcessedFile(targetFile.path_display);
+  
+      res.status(200).send('Processing complete');
+    } catch (error) {
+      console.error('Processing error:', error);
+      res.status(500).send('Internal server error');
     }
-
-    // Allow time for file processing in Dropbox
-    await new Promise(resolve => 
-      setTimeout(resolve, CONFIG.SECURITY.WEBHOOK_DELAY)
-    );
-
-    // Get latest CSV file
-    const folderContents = await new Promise((resolve, reject) => {
-      dropbox({
-        resource: 'files/list_folder',
-        parameters: { 
-          path: CONFIG.DROPBOX.INPUT_FOLDER,
-          limit: 10 
-        }
-      }, (err, result) => err ? reject(err) : resolve(result));
-    });
-
-    const csvFiles = folderContents.entries
-      .filter(file => 
-        file['.tag'] === 'file' && 
-        file.name.toLowerCase().endsWith('.csv')
-      )
-      .sort((a, b) => 
-        new Date(b.server_modified) - new Date(a.server_modified)
-      );
-
-    if (csvFiles.length === 0) {
-      return res.status(200).send('No files to process');
-    }
-
-    const targetFile = csvFiles[0];
-    const csvContent = await downloadCSVFile(targetFile.path_display);
-    const parsedData = await parseCSVContent(csvContent);
-
-    // Log raw CSV data
-    console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
-    // --- map til "venlige" variabelnavne ---
-// --- map til "venlige" variabelnavne uden replace/parseFloat ---
-const mapped = parsedData.map(item => ({
-    productId:       item['Product Id'],
-    style:           item.Style,
-    productName:     item.Name,
-    size:            item.Size,
-    amount:          item.Amount,            // rå string
-    locations:       item.Locations,
-    purchasePriceDKK: item['Purchase Price DKK'],  // rå string, fx "\"27,00\""
-    rrp:             item.RRP,               // rå string, fx "\"199,00\""
-    tariffCode:      item['Tariff Code'],
-    countryOfOrigin: item['Country of Origin']
-  }));
+  });
   
-  // --- tag første record ud til individuelle variabler ---
-  const {
-    productId,
-    style,
-    productName,
-    size,
-    amount,
-    locations,
-    purchasePriceDKK,
-    rrp,
-    tariffCode,
-    countryOfOrigin
-  } = mapped[0];
-  
-  // nu kan du bruge:
-  // productId, style, productName, size, amount, locations,
-  // purchasePriceDKK, rrp, tariffCode, countryOfOrigin
-  console.log({ productId, style, productName, size, amount });
-  
-
-
-    // Archive processed file
-    await archiveProcessedFile(targetFile.path_display);
-    
-    res.status(200).send('Processing complete');
-  } catch (error) {
-    console.error('Processing error:', error);
-    res.status(500).send('Internal server error');
-  }
-});
 
 // ======================
 // Server Initialization
