@@ -93,19 +93,22 @@ async function archiveProcessedFile(sourcePath) {
 
 /**
  * Parses CSV content to JSON
- * @param {string} csvData - Raw CSV content
  */
 function parseCSVContent(csvData) {
-  return new Promise((resolve, reject) => {
-    const results = [];
-    csv()
-      .on('data', (data) => results.push(data))
-      .on('end', () => resolve(results))
-      .on('error', reject)
-      .write(csvData)
-      .end();
-  });
-}
+    return new Promise((resolve, reject) => {
+      const results = [];
+      const parser = csv();
+  
+      parser
+        .on('data', (data) => results.push(data))
+        .on('end', () => resolve(results))
+        .on('error', reject);
+  
+      // Skriv data til parseren korrekt
+      parser.write(csvData);
+      parser.end();
+    });
+  }
 
 // ======================
 // Webhook Handler
