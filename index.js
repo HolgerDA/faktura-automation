@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const csv = require('csv-parser');
 const axios = require('axios');
 const path = require('path');
+const XLSX = require('xlsx'); // <-- NY
+const stream = require('stream'); // <-- NY
 const app = express();
 
 // ======================
@@ -86,6 +88,89 @@ async function archiveProcessedFile(sourcePath) {
     });
   });
 }
+
+//WUP WUP 
+
+/**
+ * Downloads any file from Dropbox as Buffer
+ * @param {string} filePath - Full Dropbox path to file
+ */
+async function downloadFile(filePath) {
+    return new Promise((resolve, reject) => {
+      dropbox({
+        resource: 'files/get_temporary_link',
+        parameters: { path: filePath }
+      }, (err, result) => {
+        if (err) return reject(err);
+        axios.get(result.link, { responseType: 'arraybuffer' })
+          .then(response => resolve(Buffer.from(response.data)))
+          .catch(reject);
+      });
+    });
+  }
+  
+  /**
+   * Generates Excel invoice from product data
+   * @param {Array} products - List of product objects
+   */
+  async function generateInvoiceFile(products) {
+    try {
+      const templateBuffer = await downloadFile('/template/test.xlsx');
+      const workbook = XLSX.read(templateBuffer, { type: 'buffer' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+  
+      products.forEach((product, index) => {
+        const row = 13 + index;
+        XLSX.utils.sheet_add_aoa(worksheet, [
+          [
+            product.productId,
+            product.style,
+            product.productName,
+            null,
+            product.amount,
+            product.rrp
+          ]
+        ], { origin: `A${row}` });
+      });
+  
+      const excelBuffer = XLSX.write(workbook, {
+        type: 'buffer',
+        bookType: 'xlsx'
+      });
+  
+      const fileName = products[0].fileName.replace(/\.csv$/, '.xlsx');
+      const destinationPath = `/Teamsport-Invoice/${fileName}`;
+  
+      await new Promise((resolve, reject) => {
+        const uploadStream = dropbox({
+          resource: 'files/upload',
+          parameters: {
+            path: destinationPath,
+            mode: 'overwrite',
+            autorename: false
+          },
+          headers: {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          }
+        }, (err, result) => {
+          if (err) reject(err);
+          else resolve(result);
+        });
+  
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(excelBuffer);
+        bufferStream.pipe(uploadStream);
+      });
+  
+      console.log(`Fakturafil oprettet: ${destinationPath}`);
+    } catch (error) {
+      console.error('Fejl under generering af fakturafil:', error);
+      throw error;
+    }
+  }
+  
+
+
 // ======================
 // CSV Processing (opdateret)
 // ======================
@@ -127,7 +212,7 @@ function parseCSVContent(csvData) {
   }
   
   // ======================
-  // Webhook Handler (opdateret del)
+  // Webhook Handler 
   // ======================
   app.post('/webhook', async (req, res) => {
     try {
@@ -193,11 +278,12 @@ function parseCSVContent(csvData) {
       });
   
       console.log('Processerede produkter:', JSON.stringify(products, null, 2));
+      
+      // NY FUNKTIONALITET: Generer fakturafil
+    if(products.length > 0) {
+        await generateInvoiceFile(products);
+      }
   
-      const totalValue = products
-        .reduce((sum, p) => sum + (p.amount * p.purchasePriceDKK), 0);
-  
-      console.log(`Total lagerbeholdning værdi: ${totalValue.toFixed(2)} DKK`);
   
       // Flyt fil til arkiv
       await archiveProcessedFile(targetFile.path_display);
