@@ -168,7 +168,7 @@ function parseCSVContent(csvData) {
       const csvContent = await downloadCSVFile(targetFile.path_display);
       const parsedData = await parseCSVContent(csvContent);
   
-      console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
+      console.log('CSV Data Received - check', JSON.stringify(parsedData, null, 2));
   
       // Data transformation med korrekt typekonvertering
       const products = parsedData.map(item => {
@@ -178,6 +178,7 @@ function parseCSVContent(csvData) {
         };
   
         return {
+          fileName:          targetFile.name,
           productId:         item.product_id,
           style:             item.style,
           productName:       item.name,
