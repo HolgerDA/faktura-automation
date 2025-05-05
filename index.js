@@ -142,8 +142,10 @@ async function downloadFile(filePath) {
         bookType: 'xlsx'
       });
   
-      const fileName = products[0].fileName.replace(/\.csv$/, '.xlsx');
-      const destinationPath = `/Teamsport-Invoice/${fileName}`;
+      const iso = new Date().toISOString().replace(/[:.]/g, '-');
+        const baseName = products[0].fileName.replace(/\.csv$/, '');
+        const fileName = `${baseName}_${iso}.xlsx`;
+        const destinationPath = `/Teamsport-Invoice/${fileName}`;
   
       await new Promise((resolve, reject) => {
         const uploadStream = dropbox({
