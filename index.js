@@ -97,7 +97,7 @@ async function archiveProcessedFile(sourcePath) {
 function parseCSVContent(csvData) {
     return new Promise((resolve, reject) => {
       const results = [];
-      const parser = csv();
+      const parser = csv({ separator: ';' });
   
       parser
         .on('data', (data) => results.push(data))
@@ -161,6 +161,40 @@ app.post('/webhook', async (req, res) => {
 
     // Log raw CSV data
     console.log('CSV Data Received:', JSON.stringify(parsedData, null, 2));
+    // --- map til "venlige" variabelnavne ---
+const mapped = parsedData.map(item => ({
+    productId:            item['Product Id'],
+    style:                item.Style,
+    productName:          item.Name,
+    size:                 item.Size,
+    amount:               Number(item.Amount),
+    locations:            item.Locations,
+    purchasePriceDKK:     parseFloat(item['Purchase Price DKK'].replace(',', '.')),
+    rrp:                  parseFloat(item.RRP.replace(',', '.')),
+    tariffCode:           item['Tariff Code'],
+    countryOfOrigin:      item['Country of Origin']
+  }));
+  
+  // --- tag første record ud til individuelle variabler ---
+  const {
+    productId,
+    style,
+    productName,
+    size,
+    amount,
+    locations,
+    purchasePriceDKK,
+    rrp,
+    tariffCode,
+    countryOfOrigin
+  } = mapped[0];
+  
+  // nu kan du bruge:
+  // productId, style, productName, size, amount, locations,
+  // purchasePriceDKK, rrp, tariffCode, countryOfOrigin
+  console.log({ productId, style, productName, size, amount });
+  
+
 
     // Archive processed file
     await archiveProcessedFile(targetFile.path_display);
