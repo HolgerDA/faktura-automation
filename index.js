@@ -115,7 +115,6 @@ async function downloadFile(filePath) {
   
   /**
    * Generates Excel invoice from product data
-   * @param {Array} products - List of product objects
    */
   async function generateInvoiceFile(products) {
     try {
@@ -123,6 +122,13 @@ async function downloadFile(filePath) {
       const workbook = XLSX.read(templateBuffer, { type: 'buffer' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
   
+      // Extract the base filename without .csv extension
+      const baseName = products[0].fileName.replace(/\.csv$/, '');
+  
+      // Insert the base filename into cell B5
+      XLSX.utils.sheet_add_aoa(worksheet, [[baseName]], { origin: 'B5' });
+  
+      // Add product data starting from row 13
       products.forEach((product, index) => {
         const row = 13 + index;
         XLSX.utils.sheet_add_aoa(worksheet, [
@@ -142,11 +148,12 @@ async function downloadFile(filePath) {
         bookType: 'xlsx'
       });
   
+      // Generate the invoice filename with timestamp
       const iso = new Date().toISOString().replace(/[:.]/g, '-');
-        const baseName = products[0].fileName.replace(/\.csv$/, '');
-        const fileName = `${baseName}_${iso}.xlsx`;
-        const destinationPath = `/Teamsport-Invoice/${fileName}`;
+      const fileName = `${baseName}_${iso}.xlsx`;
+      const destinationPath = `/Teamsport-Invoice/${fileName}`;
   
+      // Upload the generated invoice
       await new Promise((resolve, reject) => {
         const uploadStream = dropbox({
           resource: 'files/upload',
