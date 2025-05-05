@@ -115,7 +115,7 @@ async function downloadFile(filePath) {
    */
   async function generateInvoiceFile(products) {
     try {
-      const templateBuffer = await downloadFile('/template/test.xlsx');
+      const templateBuffer = await downloadFile('/template/Invoice-template.xlsx');
       const workbook = XLSX.read(templateBuffer, { type: 'buffer' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
   
@@ -278,7 +278,7 @@ function parseCSVContent(csvData) {
       });
   
       console.log('Processerede produkter:', JSON.stringify(products, null, 2));
-      
+
       // NY FUNKTIONALITET: Generer fakturafil
     if(products.length > 0) {
         await generateInvoiceFile(products);
