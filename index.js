@@ -229,6 +229,7 @@ function parseCSVContent(csvData) {
   // ======================
   app.post('/webhook', async (req, res) => {
     try {
+        console.log('\n=== New webhook received ===');
       // Validate webhook signature
       const signature = req.header('x-dropbox-signature');
       const expectedSignature = crypto
@@ -239,11 +240,14 @@ function parseCSVContent(csvData) {
       if (signature !== expectedSignature) {
         return res.status(403).send('Unauthorized');
       }
+      console.log('Webhook signature validated successfully');
   
       // Vent lidt for at Dropbox når at færdigbehandle filerne
       await new Promise(r => setTimeout(r, CONFIG.SECURITY.WEBHOOK_DELAY));
+      console.log('Security delay completed');
   
       // Hent seneste CSV i input-mappen
+      console.log(`Checking Dropbox folder: ${CONFIG.DROPBOX.INPUT_FOLDER}`);
       const folderContents = await new Promise((resolve, reject) => {
         dropbox({
           resource: 'files/list_folder',
@@ -269,6 +273,7 @@ function parseCSVContent(csvData) {
       console.log('CSV Data Received - check');
   
       // Data transformation med korrekt typekonvertering
+      console.log('Starting data processing');
       const products = parsedData.map(item => {
         const parseNumber = str => {
           const cleaned = str.replace(/[^0-9,]/g, '').replace(',', '.');
@@ -289,17 +294,20 @@ function parseCSVContent(csvData) {
           countryOfOrigin:   item.country_of_origin
         };
       });
+      console.log('Tranformation and temporary storing of product data in local variables complete');
   
-      console.log('Processerede produkter:', JSON.stringify(products, null, 2));
 
       // NY FUNKTIONALITET: Generer fakturafil
     if(products.length > 0) {
+        console.log('Starting invoice file generation, based on the template from "template" folder');
         await generateInvoiceFile(products);
+        console.log('Copy of invoice template completed successfully')
       }
   
   
       // Flyt fil til arkiv
       await archiveProcessedFile(targetFile.path_display);
+      console.log('Add timestamp to csv fil name, and move to folder "processed-csv-files" ');
   
       res.status(200).send('Processing complete');
     } catch (error) {
