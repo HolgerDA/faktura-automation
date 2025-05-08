@@ -32,13 +32,14 @@ const CONFIG = {
 };
 
 // ======================
-// Dropbox Client
+// Dropbox Client Setup
 // ======================
 const dropbox = Dropbox.authenticate({ token: CONFIG.DROPBOX.TOKEN });
 
 // ======================
 // Logger Utility
 // ======================
+// A simple logger function to unify log output
 function log(message) {
   console.log(message);
 }
@@ -46,6 +47,7 @@ function log(message) {
 // ======================
 // File Operations
 // ======================
+// Retrieve a temporary download link for any Dropbox path
 async function getTemporaryLink(dropboxPath) {
   const result = await new Promise((resolve, reject) => {
     dropbox({ resource: 'files/get_temporary_link', parameters: { path: dropboxPath } },
@@ -55,55 +57,67 @@ async function getTemporaryLink(dropboxPath) {
   return result.link;
 }
 
+// Download a CSV file as text and log each sub-step
 async function downloadTextFile(dropboxPath) {
-  log(`Reading CSV file: ${dropboxPath}`);
+  log(`Step: Starting to read the CSV file from Dropbox at path: ${dropboxPath}`);
   const link = await getTemporaryLink(dropboxPath);
+  log('Step: Received temporary link for CSV download');
   const response = await axios.get(link);
-  log('CSV file downloaded from Dropbox');
+  log('Step: CSV file content downloaded successfully');
   return response.data;
 }
 
+// Download a binary file (invoice template) and log each sub-step
 async function downloadBinaryFile(dropboxPath) {
-  log(`Downloading template file: ${dropboxPath}`);
+  log(`Step: Downloading invoice template file from Dropbox at path: ${dropboxPath}`);
   const link = await getTemporaryLink(dropboxPath);
+  log('Step: Received temporary link for template file download');
   const response = await axios.get(link, { responseType: 'arraybuffer' });
-  log('Template file downloaded successfully');
+  log('Step: Invoice template file downloaded into memory');
   return Buffer.from(response.data);
 }
 
+// Upload a buffer (generated invoice) to Dropbox
 async function uploadBufferToDropbox(buffer, destinationPath, mimeType) {
-  log(`Uploading final invoice to: ${destinationPath}`);
+  log(`Step: Uploading the generated invoice to Dropbox at path: ${destinationPath}`);
   await new Promise((resolve, reject) => {
     const uploadStream = dropbox({
       resource: 'files/upload',
       parameters: { path: destinationPath, mode: 'overwrite', autorename: false },
       headers: { 'Content-Type': mimeType }
     }, (err, res) => err ? reject(err) : resolve(res));
+
     const pass = new stream.PassThrough();
     pass.end(buffer);
     pass.pipe(uploadStream);
   });
-  log('Invoice upload complete');
+  log('Step: Invoice file upload completed');
 }
 
+// Move and rename the processed CSV file to the 'processed' folder
 async function moveDropboxFile(sourcePath, targetFolder) {
   const baseName = path.basename(sourcePath);
-  log(`Archiving original CSV: ${sourcePath}`);
+  log(`Step: Archiving the original CSV file: ${sourcePath}`);
   const timestamp = Date.now();
-  const destPath = `${targetFolder}/${baseName}_${timestamp}.csv`;
+  const newName = `${baseName}_${timestamp}.csv`;
+  const destPath = `${targetFolder}/${newName}`;
+
   await new Promise((resolve, reject) => {
     dropbox({ resource: 'files/move_v2', parameters: { from_path: sourcePath, to_path: destPath, autorename: false } },
       (err, res) => err ? reject(err) : resolve(res)
     );
   });
-  log(`Moved and renamed CSV to processed folder: ${destPath}`);
+
+  log(`Step: Original CSV moved and renamed to processed folder as: ${destPath}`);
+  return destPath;
 }
 
 // ======================
 // CSV Parsing
 // ======================
+// Parse CSV content into JS objects and store temporarily
 async function parseCSV(content) {
-  log('Saving product data in temporary variable');
+  log('Step: Parsing CSV content into product records');
   return new Promise((resolve, reject) => {
     const rows = [];
     const parser = csvParser({
@@ -114,11 +128,13 @@ async function parseCSV(content) {
 
     parser.on('data', data => rows.push(data));
     parser.on('end', () => {
-      log('CSV parsing complete');
+      log(`Step: Completed CSV parsing, saved ${rows.length} rows in temporary variable`);
       resolve(rows);
     });
     parser.on('error', err => reject(err));
-    const cleaned = content.split('\n').map(l => l.replace(/^"|"$/g, '')).join('\n');
+
+    // Clean up extra quotes before parsing
+    const cleaned = content.split('\n').map(line => line.replace(/^"|"$/g, '')).join('\n');
     parser.write(cleaned);
     parser.end();
   });
@@ -127,38 +143,45 @@ async function parseCSV(content) {
 // ======================
 // Invoice Generation
 // ======================
+// Using the parsed products, fill out and save an invoice
 async function generateInvoice(products) {
-  log('Preparing to generate new invoice file based on template');
+  log('Step: Starting invoice generation based on template');
   const templatePath = `${CONFIG.DROPBOX.FOLDERS.TEMPLATE}/Invoice-template.xlsx`;
-  const templateBuffer = await downloadBinaryFile(templatePath);
 
-  log('Filling out invoice with product data');
+  // Download and read template
+  const templateBuffer = await downloadBinaryFile(templatePath);
+  log('Step: Loaded the invoice template into a workbook object');
+
   const workbook = XLSX.read(templateBuffer, { type: 'buffer' });
   const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-  // Clean and save file name
-  const baseName = products[0].fileName.replace(/\.csv$/, '');
-  log(`Cleaning file name and saving to variable: ${baseName}`);
-  XLSX.utils.sheet_add_aoa(worksheet, [[baseName]], { origin: 'B5' });
+  // Extract and clean base filename for invoice naming
+  const rawName = products[0].fileName;
+  log(`Step: Extracting base filename from CSV: ${rawName}`);
+  const baseName = rawName.replace(/\.csv$/, '');
+  log(`Step: Cleaned base filename saved as: ${baseName}`);
 
-  // Insert product rows
+  // Insert baseName into invoice template cell B5
+  XLSX.utils.sheet_add_aoa(worksheet, [[baseName]], { origin: 'B5' });
+  log('Step: Inserted cleaned filename into template cell B5');
+
+  // Fill out product lines starting at row 13
   products.forEach((p, idx) => {
     const rowNumber = 13 + idx;
     XLSX.utils.sheet_add_aoa(worksheet, [[p.productId, p.style, p.productName, null, p.amount, p.rrp]], { origin: `A${rowNumber}` });
   });
-  log('Populated invoice sheet with product details');
+  log('Step: Populated invoice rows with product data');
 
-  // Rename invoice to customer name + timestamp
-  log(`Renaming invoice file to customer name: ${baseName}`);
+  // Generate invoice filename with timestamp
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const invoiceName = `${baseName}_${timestamp}.xlsx`;
   const invoicePath = `${CONFIG.DROPBOX.FOLDERS.INVOICE_OUTPUT}/${invoiceName}`;
+  log(`Step: Generated invoice filename with customer name and timestamp: ${invoiceName}`);
 
-  // Write buffer and upload
+  // Write and upload the invoice
   const outBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   await uploadBufferToDropbox(outBuffer, invoicePath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-
-  log(`Moved finished invoice to Teamsport-Invoice: ${invoicePath}`);
+  log(`Step: Finished invoice moved to Teamsport-Invoice folder at: ${invoicePath}`);
 }
 
 // ======================
@@ -170,41 +193,47 @@ app.use(express.json({ verify: (req, _, buf) => { req.raw = buf.toString(); } })
 app.post('/webhook', async (req, res) => {
   log('=== New webhook received ===');
   try {
-    log('Validating webhook signature');
+    // 1) Validate signature
+    log('Step: Validating webhook signature using app secret');
     const signature = req.header('x-dropbox-signature');
     const expected = crypto.createHmac('sha256', CONFIG.DROPBOX.APP_SECRET).update(req.raw).digest('hex');
     if (signature !== expected) {
-      log('Signature did not match, aborting');
+      log('Step: Signature mismatch detected, rejecting request');
       return res.status(403).send('Unauthorized');
     }
-    log('Webhook signature validated successfully');
+    log('Step: Webhook signature validated successfully');
 
-    log('Waiting briefly for Dropbox to finish processing');
+    // 2) Wait for Dropbox to complete file write
+    log('Step: Waiting briefly for Dropbox to finalize file operations');
     await new Promise(r => setTimeout(r, CONFIG.SECURITY.WEBHOOK_DELAY_MS));
-    log('Security delay completed');
+    log('Step: Security delay complete');
 
-    log(`Listing files in folder: ${CONFIG.DROPBOX.FOLDERS.INPUT_CSV}`);
+    // 3) List CSV files in input folder
+    log(`Step: Listing CSV files in folder: ${CONFIG.DROPBOX.FOLDERS.INPUT_CSV}`);
     const listRes = await new Promise((resolve, reject) => {
       dropbox({ resource: 'files/list_folder', parameters: { path: CONFIG.DROPBOX.FOLDERS.INPUT_CSV } },
         (err, result) => err ? reject(err) : resolve(result)
       );
     });
 
-    const csvFiles = listRes.entries.filter(e => e['.tag'] === 'file' && e.name.endsWith('.csv'))
+    const csvFiles = listRes.entries
+      .filter(e => e['.tag'] === 'file' && e.name.endsWith('.csv'))
       .sort((a, b) => new Date(b.server_modified) - new Date(a.server_modified));
 
     if (!csvFiles.length) {
-      log('No CSV files found, nothing to do');
+      log('Step: No CSV files found - ending process');
       return res.status(200).send('No files to process');
     }
 
+    // 4) Read and parse latest CSV
     const latest = csvFiles[0];
-    log(`Reads CSV file: ${latest.path_display}`);
+    log(`Step: Selected latest CSV file for processing: ${latest.path_display}`);
     const csvContent = await downloadTextFile(latest.path_display);
 
     const records = await parseCSV(csvContent);
+    log(`Step: Parsed CSV into ${records.length} product records`);
 
-    log('Transforming records into product data');
+    // 5) Transform raw records into structured product data
     const products = records.map(r => ({
       fileName: latest.name,
       productId: r.product_id,
@@ -218,16 +247,17 @@ app.post('/webhook', async (req, res) => {
       tariffCode: r.tariff_code,
       countryOfOrigin: r.country_of_origin
     }));
+    log('Step: Transformed CSV rows into internal product data structure');
 
-    // Move original CSV out of the way
+    // 6) Archive the original CSV
     await moveDropboxFile(latest.path_display, CONFIG.DROPBOX.FOLDERS.PROCESSED_CSV);
 
-    // Generate invoice
+    // 7) Generate and upload invoice based on product data
     if (products.length) {
       await generateInvoice(products);
     }
 
-    log('=== Processing complete ===');
+    log('=== All processing steps completed successfully ===');
     res.status(200).send('OK');
   } catch (error) {
     console.error('Error during webhook processing:', error);
@@ -240,15 +270,16 @@ app.post('/webhook', async (req, res) => {
 // ======================
 (async function start() {
   try {
-    if (!CONFIG.DROPBOX.TOKEN || !CONFIG.DROPBOX.APP_SECRET) throw new Error('Dropbox credentials missing');
-    // Test connection
+    if (!CONFIG.DROPBOX.TOKEN || !CONFIG.DROPBOX.APP_SECRET) throw new Error('Missing Dropbox credentials');
+    // Verify connection
     await new Promise((resolve, reject) => {
       dropbox({ resource: 'files/list_folder', parameters: { path: CONFIG.DROPBOX.FOLDERS.INPUT_CSV } },
         (err, res) => err ? reject(err) : resolve(res)
       );
     });
     app.listen(CONFIG.SERVER_PORT, () => {
-      log(`Server up and running on port ${CONFIG.SERVER_PORT}`);
+      log(`Starting Container`);
+      log(`Server up and listening on port ${CONFIG.SERVER_PORT}`);
       log('Configured Dropbox folders:');
       Object.entries(CONFIG.DROPBOX.FOLDERS).forEach(([key, val]) => log(`- ${key}: ${val}`));
     });
