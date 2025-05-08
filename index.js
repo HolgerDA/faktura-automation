@@ -68,7 +68,7 @@ async function downloadBinaryFile(dropboxPath) {
   const link = await getTemporaryLink(dropboxPath);
   log('🔗 Temporary download link for template obtained');
   const response = await axios.get(link, { responseType: 'arraybuffer' });
-  log('📥 Template file downloaded into buffer');
+  log('📥 Template file downloaded');
   return Buffer.from(response.data);
 }
 
@@ -89,7 +89,7 @@ async function uploadBufferToDropbox(buffer, destinationPath, mimeType) {
 
 async function moveDropboxFile(sourcePath, targetFolder) {
   const baseName = path.basename(sourcePath);
-  log('📦 Archiving original CSV file and appending timestamp to avoid name conflicts');
+  log('📦 Archiving original CSV and adding timestamp to prevent name conflicts');
   const timestamp = Date.now();
   const destPath = `${targetFolder}/${baseName}_${timestamp}.csv`;
   await new Promise((resolve, reject) => {
@@ -101,10 +101,10 @@ async function moveDropboxFile(sourcePath, targetFolder) {
 }
 
 // ======================
-// CSV Data Extraction
+// CSV Processing
 // ======================
-async function extractProductData(content) {
-  log('🔧 Extracting product data from CSV into memory');
+async function convertCSVToObjects(content) {
+  log('🔧 Breaking CSV content into product objects held in memory');
   return new Promise((resolve, reject) => {
     const rows = [];
     const parser = csvParser({
@@ -114,11 +114,11 @@ async function extractProductData(content) {
     });
     parser.on('data', data => rows.push(data));
     parser.on('end', () => {
-      log(`📊 Extracted ${rows.length} records of product data`);
+      log(`📊 Converted ${rows.length} rows of product data into memory`);
       resolve(rows);
     });
     parser.on('error', reject);
-    const cleaned = content.split('\n').map(line => line.replace(/^"|"$/g, '')).join('\n');
+    const cleaned = content.split('\n').map(l => l.replace(/^"|"$/g, '')).join('\n');
     parser.write(cleaned);
     parser.end();
   });
@@ -128,29 +128,27 @@ async function extractProductData(content) {
 // Invoice Generation
 // ======================
 async function generateInvoice(products) {
-  log('🖨️ Generating a new invoice using the Excel template, located in dropbox folder "/Invoice-template"');
+  log('🖨️  Filling Excel template with product data and customer name');
   const templatePath = `${CONFIG.DROPBOX.FOLDERS.TEMPLATE}/Invoice-template.xlsx`;
   const templateBuffer = await downloadBinaryFile(templatePath);
-  log('✅ Invoice template loaded successfully');
-
   const workbook = XLSX.read(templateBuffer, { type: 'buffer' });
   const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
   const rawName = products[0].fileName;
   const baseName = rawName.replace(/\.csv$/, '');
-  log(`✍️ Writing customer name into template: ${baseName}`);
+  log(`✍️ Writing customer name "${baseName}" into cell B5`);
   XLSX.utils.sheet_add_aoa(worksheet, [[baseName]], { origin: 'B5' });
 
   products.forEach((p, idx) => {
     const rowNum = 13 + idx;
     XLSX.utils.sheet_add_aoa(worksheet, [[p.productId, p.style, p.productName, null, p.amount, p.rrp]], { origin: `A${rowNum}` });
   });
-  log('🖊️ All product lines copied into the spreadsheet');
+  log('🖊️ All product lines copied into spreadsheet');
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const invoiceName = `${baseName}_${timestamp}.xlsx`;
-  log(`💾 Saving invoice as: ${invoiceName}`);
   const invoicePath = `${CONFIG.DROPBOX.FOLDERS.INVOICE_OUTPUT}/${invoiceName}`;
+  log(`💾 Saving invoice as ${invoiceName}`);
 
   const outBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   await uploadBufferToDropbox(outBuffer, invoicePath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -172,12 +170,12 @@ app.post('/webhook', async (req, res) => {
       log('❌ Signature mismatch – request rejected');
       return res.status(403).send('Unauthorized');
     }
-    log('✅ Webhook signature valid – processing request');
+    log('✅ Webhook signature valid – request is authentic');
 
-    log('⏳ Waiting 2 seconds for Dropbox to finish writing the file');
+    log('⏳ Waiting 2 s so Dropbox can complete its write operation');
     await new Promise(r => setTimeout(r, CONFIG.SECURITY.WEBHOOK_DELAY_MS));
 
-    log(`📂 Scanning folder for the newest CSV: ${CONFIG.DROPBOX.FOLDERS.INPUT_CSV}`);
+    log(`📂 Scanning folder for newest CSV: ${CONFIG.DROPBOX.FOLDERS.INPUT_CSV}`);
     const listRes = await new Promise((resolve, reject) => {
       dropbox({ resource: 'files/list_folder', parameters: { path: CONFIG.DROPBOX.FOLDERS.INPUT_CSV } },
         (err, result) => err ? reject(err) : resolve(result));
@@ -187,15 +185,15 @@ app.post('/webhook', async (req, res) => {
       .sort((a, b) => new Date(b.server_modified) - new Date(a.server_modified));
 
     if (!csvFiles.length) {
-      log('ℹ️  No CSV files found – nothing to do');
-      return res.status(200).send('No files to process');
+      log('ℹ️ No CSV files found – automation ends');
+      return res.status(200).send('No files');
     }
 
     const latest = csvFiles[0];
-    log(`📌 Latest CSV selected for processing: ${latest.name}`);
+    log(`📌 Latest CSV selected: ${latest.name}`);
 
     const csvContent = await downloadTextFile(latest.path_display);
-    const records = await extractProductData(csvContent);
+    const records = await convertCSVToObjects(csvContent);
 
     const products = records.map(r => ({
       fileName: latest.name,
@@ -211,38 +209,4 @@ app.post('/webhook', async (req, res) => {
       countryOfOrigin: r.country_of_origin
     }));
 
-    await moveDropboxFile(latest.path_display, CONFIG.DROPBOX.FOLDERS.PROCESSED_CSV);
-
-    if (products.length) {
-      await generateInvoice(products);
-    }
-
-    log('🎉 Automation pipeline complete – sending OK response to Dropbox');
-    res.status(200).send('OK');
-  } catch (error) {
-    console.error('🔥 Error in automation pipeline:', error);
-    res.status(500).send('Internal error');
-  }
-});
-
-// ======================
-// Server Startup
-// ======================
-(async function start() {
-  try {
-    if (!CONFIG.DROPBOX.TOKEN || !CONFIG.DROPBOX.APP_SECRET) throw new Error('Dropbox credentials missing');
-    await new Promise((resolve, reject) => {
-      dropbox({ resource: 'files/list_folder', parameters: { path: CONFIG.DROPBOX.FOLDERS.INPUT_CSV } },
-        (err, res) => err ? reject(err) : resolve(res));
-    });
-    app.listen(CONFIG.SERVER_PORT, () => {
-      log('🚀 Container started – server online');
-      log(`🔈 Listening on port ${CONFIG.SERVER_PORT}`);
-      log('🗂️  Configured Dropbox folders:');
-      Object.entries(CONFIG.DROPBOX.FOLDERS).forEach(([key, val]) => log(`   • ${key} → ${val}`));
-    });
-  } catch (err) {
-    console.error('💥 Startup failed:', err.message);
-    process.exit(1);
-  }
-})();
+    await moveDropboxFile(latest.path_display, CONFIG.DROPBOX.FOLDERS.PROCESSED_C
