@@ -31,7 +31,7 @@ const CONFIG = {
     INVOICE_FOLDER   : process.env.DROPBOX_INVOICE_FOLDER   || '/Teamsport-Invoice'
   },
   SECURITY : {
-    WEBHOOK_DELAY_MS : 2_000            //  ⏳  2-second write-settle delay
+    WEBHOOK_DELAY_MS : 2_000            //  2-second write-settle delay
   }
 };
 
@@ -57,20 +57,20 @@ const getTempLink = (dbxPath) => new Promise((resolve, reject) => {
 
 // download text (CSV) via the temp link
 const downloadTextFile = async (dbxPath) => {
-  console.log('📄 Fetching CSV file via API link …');
+  console.log('Fetching CSV file via API link …');
   const link = await getTempLink(dbxPath);
-  console.log('🔗 Temporary download link obtained');
+  console.log('Temporary download link obtained');
   const { data } = await axios.get(link);
-  console.log('📥 CSV content successfully downloaded');
+  console.log('CSV content successfully downloaded');
   return data;
 };
 
 // download binary (template) via the temp link
 const downloadBinaryFile = async (dbxPath) => {
-  console.log('🔗 Temporary download link for template obtained');
+  console.log('Temporary download link for template obtained');
   const link = await getTempLink(dbxPath);
   const { data } = await axios.get(link, { responseType : 'arraybuffer' });
-  console.log('📥 Template file downloaded');
+  console.log('Template file downloaded');
   return Buffer.from(data);
 };
 
@@ -123,7 +123,7 @@ const parseCSV = (rawCsv) => new Promise((resolve, reject) => {
   parser.on('data', (d) => rows.push(d))
         .on('error', reject)
         .on('end', () => {
-          console.log(`📊 Parsed ${rows.length} product rows`);
+          console.log(`Parsed ${rows.length} product rows`);
           resolve(rows);
         });
 
@@ -138,7 +138,7 @@ const parseCSV = (rawCsv) => new Promise((resolve, reject) => {
 
 /* ----- 5.2  Invoice generation ------------------------------------------- */
 const generateInvoice = async (products) => {
-  console.log('📑 Fetching latest invoice template from /template');
+  console.log('Fetching latest invoice template from /template');
   const templatePath = `${CONFIG.DROPBOX.TEMPLATE_FOLDER}/Invoice-template.xlsx`;
   const templateBuf  = await downloadBinaryFile(templatePath);
 
@@ -146,10 +146,10 @@ const generateInvoice = async (products) => {
   const sheet      = workbook.Sheets[workbook.SheetNames[0]];
   const baseName   = products[0].fileName.replace(/\.csv$/i, '');
 
-  console.log('✍️  Writing customer name into cell B5');
+  console.log('Writing customer name into cell B5');
   XLSX.utils.sheet_add_aoa(sheet, [[ baseName ]], { origin : 'B5' });
 
-  console.log('🖊️  All product lines copied into spreadsheet');
+  console.log('All product lines copied into spreadsheet');
   products.forEach((p, idx) => {
     const row = 13 + idx;
     XLSX.utils.sheet_add_aoa(
@@ -163,12 +163,12 @@ const generateInvoice = async (products) => {
   const outName   = `${baseName}_${timestamp}.xlsx`;
   const outPath   = `${CONFIG.DROPBOX.INVOICE_FOLDER}/${outName}`;
 
-  console.log(`💾 Saving invoice as ${outName}`);
+  console.log(`Saving invoice as ${outName}`);
   const buf = XLSX.write(workbook, { type : 'buffer', bookType : 'xlsx' });
 
-  console.log('🚀 Uploading finished invoice so Finance can access it');
+  console.log('Uploading finished invoice so Finance can access it');
   await uploadFile(buf, outPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  console.log('✅ Invoice upload complete');
+  console.log('Invoice upload complete');
 };
 
 /* -------------------------------------------------------------------------- */
@@ -182,27 +182,27 @@ app.use(express.json({
 /*                                7.  WEBHOOK                                 */
 /* -------------------------------------------------------------------------- */
 app.post('/webhook', async (req, res) => {
-  console.log('📥 Dropbox webhook received');
+  console.log('Dropbox webhook received');
 
   try {
     /* --- 7.1  Signature check ------------------------------------------- */
-    console.log('🔒 Validating webhook signature');
+    console.log('Validating webhook signature');
     const sig = req.header('x-dropbox-signature');
     const expected = crypto.createHmac('sha256', CONFIG.DROPBOX.APP_SECRET)
                            .update(req.rawBody).digest('hex');
 
     if (sig !== expected) {
-      console.error('❌ Invalid webhook signature – request blocked');
+      console.error('Invalid webhook signature – request blocked');
       return res.status(403).send('Unauthorized');
     }
-    console.log('✅ Webhook signature valid');
+    console.log('Webhook signature valid');
 
     /* --- 7.2  Wait for Dropbox to finish writing ------------------------ */
-    console.log(`⏳ Waiting ${CONFIG.SECURITY.WEBHOOK_DELAY_MS / 1000} s so Dropbox can finish writing`);
+    console.log(`Waiting ${CONFIG.SECURITY.WEBHOOK_DELAY_MS / 1000} s so Dropbox can finish writing`);
     await delay(CONFIG.SECURITY.WEBHOOK_DELAY_MS);
 
     /* --- 7.3  Identify newest CSV -------------------------------------- */
-    console.log('📂 Scanning folder for newest CSV');
+    console.log('Scanning folder for newest CSV');
     const { entries } = await new Promise((resolve, reject) => {
       dropbox({
         resource   : 'files/list_folder',
@@ -215,12 +215,12 @@ app.post('/webhook', async (req, res) => {
       .sort((a, b) => new Date(b.server_modified) - new Date(a.server_modified));
 
     if (!csvFiles.length) {
-      console.log('ℹ️  No CSV files found – nothing to process');
+      console.log('No CSV files found – nothing to process');
       return res.status(200).send('No CSV files to process');
     }
 
     const latest = csvFiles[0];
-    console.log(`📌 Latest CSV selected – ${latest.name}`);
+    console.log(`Latest CSV selected – ${latest.name}`);
 
     /* --- 7.4  Download + parse CSV ------------------------------------- */
     const csvData   = await downloadTextFile(latest.path_display);
@@ -251,19 +251,19 @@ app.post('/webhook', async (req, res) => {
     }
 
     /* --- 7.6  Archive the original CSV --------------------------------- */
-    console.log('📦 Archiving original CSV & appending timestamp');
+    console.log('Archiving original CSV & appending timestamp');
     const archivedPath = await moveFileWithTimestamp(
       latest.path_display,
       CONFIG.DROPBOX.PROCESSED_FOLDER
     );
-    console.log(`✅ CSV moved to ${archivedPath}`);
+    console.log(`CSV moved to ${archivedPath}`);
 
     /* --- 7.7  Respond OK ------------------------------------------------ */
-    console.log('🎉 Automation pipeline complete');
+    console.log('Automation pipeline complete');
     return res.status(200).send('Processing complete');
 
   } catch (err) {
-    console.error('🔥 Processing error:', err);
+    console.error('Processing error:', err);
     return res.status(500).send('Internal server error');
   }
 });
@@ -286,7 +286,7 @@ app.post('/webhook', async (req, res) => {
     });
 
     app.listen(CONFIG.SERVER_PORT, () => {
-      console.log(`🚀 Server online →  http://localhost:${CONFIG.SERVER_PORT}`);
+      console.log(`Server online →  http://localhost:${CONFIG.SERVER_PORT}`);
       console.table({
         'INPUT_FOLDER'    : CONFIG.DROPBOX.INPUT_FOLDER,
         'PROCESSED_FOLDER': CONFIG.DROPBOX.PROCESSED_FOLDER,
@@ -296,7 +296,7 @@ app.post('/webhook', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Server failed to start:', err.message);
+    console.error('Server failed to start:', err.message);
     process.exit(1);
   }
 })();
