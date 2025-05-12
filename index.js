@@ -105,7 +105,7 @@ const uploadFile = (buffer, dbxPath, mimeType) => new Promise((resolve, reject) 
 
 /* ----- 5.1  CSV parsing --------------------------------------------------- */
 const parseCSV = (rawCsv) => new Promise((resolve, reject) => {
-  console.log('🔧 Converting CSV rows into in-memory product objects');
+  console.log('Converting CSV rows into in-memory product objects');
 
   const rows = [];
   const parser = csv({
